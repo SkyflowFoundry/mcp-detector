@@ -1,4 +1,12 @@
 {
+  "permissions": {
+    "allow": [
+      "Bash(npm run build-server:*)",
+      "Bash(npm run build-client:*)",
+      "Bash(npx prettier:*)",
+      "Bash(npm run build:*)"
+    ]
+  },
   "enabledPlugins": {
     "skyflow@skyflow-marketplace": true
   }

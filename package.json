@@ -1,53 +1,40 @@
 {
-  "name": "@modelcontextprotocol/inspector",
+  "name": "@skyflowfoundry/mcp-detector",
   "version": "0.20.0",
-  "description": "Model Context Protocol inspector",
+  "description": "MCP Detector - PII-aware MCP traffic inspection tool",
   "license": "SEE LICENSE IN LICENSE",
-  "author": "Model Context Protocol a Series of LF Projects, LLC.",
-  "homepage": "https://modelcontextprotocol.io",
-  "bugs": "https://github.com/modelcontextprotocol/inspector/issues",
+  "author": "SkyflowFoundry",
+  "homepage": "https://github.com/SkyflowFoundry/mcp-detector",
+  "bugs": "https://github.com/SkyflowFoundry/mcp-detector/issues",
   "type": "module",
-  "bin": {
-    "mcp-inspector": "cli/build/cli.js"
-  },
   "files": [
-    "client/bin",
     "client/dist",
-    "server/build",
-    "cli/build"
+    "server/build"
   ],
   "workspaces": [
     "client",
-    "server",
-    "cli"
+    "server"
   ],
   "scripts": {
-    "build": "npm run build-server && npm run build-client && npm run build-cli",
+    "build": "npm run build-server && npm run build-client",
     "build-server": "cd server && npm run build",
     "build-client": "cd client && npm run build",
-    "build-cli": "cd cli && npm run build",
-    "clean": "rimraf ./node_modules ./client/node_modules ./cli/node_modules ./build ./client/dist ./server/build ./cli/build ./package-lock.json && npm install",
+    "clean": "rimraf ./node_modules ./client/node_modules ./build ./client/dist ./server/build ./package-lock.json && npm install",
     "dev": "node client/bin/start.js --dev",
     "dev:windows": "node client/bin/start.js --dev",
-    "dev:sdk": "npm run link:sdk && concurrently \"npm run dev\" \"cd sdk && npm run build:esm:w\"",
-    "link:sdk": "(test -d sdk || ln -sf ${MCP_SDK:-$PWD/../typescript-sdk} sdk) && (cd sdk && npm link && (test -d node_modules || npm i)) && npm link @modelcontextprotocol/sdk",
-    "unlink:sdk": "(cd sdk && npm unlink -g) && rm sdk && npm unlink @modelcontextprotocol/sdk",
     "start": "node client/bin/start.js",
     "start-server": "cd server && npm run start",
     "start-client": "cd client && npm run preview",
     "test": "npm run prettier-check && cd client && npm test",
-    "test-cli": "cd cli && npm run test",
     "test:e2e": "MCP_AUTO_OPEN_ENABLED=false npm run test:e2e --workspace=client",
     "prettier-fix": "prettier --write .",
     "prettier-check": "prettier --check .",
     "lint": "prettier --check . && cd client && npm run lint",
     "prepare": "husky && npm run build",
-    "publish-all": "npm publish --workspaces --access public && npm publish --access public",
     "update-version": "node scripts/update-version.js",
     "check-version": "node scripts/check-version-consistency.js"
   },
   "dependencies": {
-    "@modelcontextprotocol/inspector-cli": "^0.20.0",
     "@modelcontextprotocol/inspector-client": "^0.20.0",
     "@modelcontextprotocol/inspector-server": "^0.20.0",
     "@modelcontextprotocol/sdk": "^1.25.2",

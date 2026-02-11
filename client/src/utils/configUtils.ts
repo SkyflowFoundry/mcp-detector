@@ -58,38 +58,10 @@ export const getMCPTaskTtl = (config: InspectorConfig): number => {
   return config.MCP_TASK_TTL.value as number;
 };
 
-export const getInitialTransportType = ():
-  | "stdio"
-  | "sse"
-  | "streamable-http" => {
-  const param = getSearchParam("transport");
-  if (param === "stdio" || param === "sse" || param === "streamable-http") {
-    return param;
-  }
-  return (
-    (localStorage.getItem("lastTransportType") as
-      | "stdio"
-      | "sse"
-      | "streamable-http") || "stdio"
-  );
-};
-
 export const getInitialSseUrl = (): string => {
   const param = getSearchParam("serverUrl");
   if (param) return param;
-  return localStorage.getItem("lastSseUrl") || "http://localhost:3001/sse";
-};
-
-export const getInitialCommand = (): string => {
-  const param = getSearchParam("serverCommand");
-  if (param) return param;
-  return localStorage.getItem("lastCommand") || "mcp-server-everything";
-};
-
-export const getInitialArgs = (): string => {
-  const param = getSearchParam("serverArgs");
-  if (param) return param;
-  return localStorage.getItem("lastArgs") || "";
+  return localStorage.getItem("lastSseUrl") || "";
 };
 
 // Returns a map of config key -> value from query params if present

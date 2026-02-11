@@ -1,8 +1,4 @@
-#!/usr/bin/env node
-
 import cors from "cors";
-import { parseArgs } from "node:util";
-import { parse as shellParseArgs } from "shell-quote";
 import nodeFetch, { Headers as NodeHeaders } from "node-fetch";
 
 // Type-compatible wrappers for node-fetch to work with browser-style types
@@ -10,28 +6,21 @@ const fetch = nodeFetch;
 const Headers = NodeHeaders;
 
 import {
-  SSEClientTransport,
-  SseError,
-} from "@modelcontextprotocol/sdk/client/sse.js";
-import {
-  StdioClientTransport,
-  getDefaultEnvironment,
-} from "@modelcontextprotocol/sdk/client/stdio.js";
-import {
   StreamableHTTPClientTransport,
   StreamableHTTPError,
 } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
-import { SSEServerTransport } from "@modelcontextprotocol/sdk/server/sse.js";
 import { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import express from "express";
 import rateLimit from "express-rate-limit";
-import { findActualExecutable } from "spawn-rx";
 import mcpProxy from "./mcpProxy.js";
 import { randomUUID, randomBytes, timingSafeEqual } from "node:crypto";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
 import { readFileSync } from "fs";
+import { extractSkyflowCredentials, extractDetectionMode } from "./types.js";
+import type { DetectionEvent } from "./types.js";
+import { validateCredentials } from "./skyflowClient.js";
 
 const DEFAULT_MCP_PROXY_LISTEN_PORT = "6277";
 
@@ -40,29 +29,10 @@ const sandboxRateLimiter = rateLimit({
   max: 100, // limit each IP to 100 /sandbox requests per windowMs
 });
 
-const defaultEnvironment = {
-  ...getDefaultEnvironment(),
-  ...(process.env.MCP_ENV_VARS ? JSON.parse(process.env.MCP_ENV_VARS) : {}),
-};
-
-const { values } = parseArgs({
-  args: process.argv.slice(2),
-  options: {
-    env: { type: "string", default: "" },
-    args: { type: "string", default: "" },
-    command: { type: "string", default: "" },
-    transport: { type: "string", default: "" },
-    "server-url": { type: "string", default: "" },
-  },
-});
-
 /**
- * Helper function to detect 401 Unauthorized errors from various transport types.
- * StreamableHTTPClientTransport throws a generic Error with "HTTP 401" in the message
- * when there's no authProvider configured, while SSEClientTransport throws SseError.
+ * Helper function to detect 401 Unauthorized errors from Streamable HTTP transport.
  */
 const is401Error = (error: unknown): boolean => {
-  if (error instanceof SseError && error.code === 401) return true;
   if (error instanceof StreamableHTTPError && error.code === 401) return true;
   if (
     error instanceof Error &&
@@ -86,8 +56,14 @@ const getHttpHeaders = (req: express.Request): Record<string, string> => {
       lowerKey === "authorization" ||
       lowerKey === "last-event-id"
     ) {
-      // Exclude the proxy's own authentication header and the Client <-> Proxy session ID header
-      if (lowerKey !== "x-mcp-proxy-auth" && lowerKey !== "mcp-session-id") {
+      // Exclude the proxy's own authentication header, the Client <-> Proxy session ID header,
+      // and Skyflow/detection headers (those are consumed by the proxy, not forwarded)
+      if (
+        lowerKey !== "x-mcp-proxy-auth" &&
+        lowerKey !== "mcp-session-id" &&
+        !lowerKey.startsWith("x-skyflow-") &&
+        lowerKey !== "x-detection-mode"
+      ) {
         const value = req.headers[key];
 
         if (typeof value === "string") {
@@ -183,6 +159,9 @@ const webAppTransports: Map<string, Transport> = new Map<string, Transport>(); /
 const serverTransports: Map<string, Transport> = new Map<string, Transport>(); // Server Transports by web app sessionId
 const sessionHeaderHolders: Map<string, { headers: HeadersInit }> = new Map(); // For dynamic header updates
 
+// Detection event SSE connections: sessionId -> Set of response objects
+const detectEventListeners: Map<string, Set<express.Response>> = new Map();
+
 // Use provided token from environment or generate a new one
 const sessionToken =
   process.env.MCP_PROXY_AUTH_TOKEN || randomBytes(32).toString("hex");
@@ -197,11 +176,23 @@ const originValidationMiddleware = (
   const origin = req.headers.origin;
 
   // Default origins based on CLIENT_PORT or use environment variable
+  // On Vercel, ALLOWED_ORIGINS should include the deployment URL
   const clientPort = process.env.CLIENT_PORT || "6274";
   const defaultOrigin = `http://localhost:${clientPort}`;
   const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(",") || [
     defaultOrigin,
   ];
+
+  // On Vercel, allow same-origin requests (origin matches the deployment)
+  if (process.env.VERCEL && origin) {
+    const vercelUrl = process.env.VERCEL_URL;
+    if (
+      vercelUrl &&
+      (origin === `https://${vercelUrl}` || origin.endsWith(".vercel.app"))
+    ) {
+      return next();
+    }
+  }
 
   if (origin && !allowedOrigins.includes(origin)) {
     console.error(`Invalid origin: ${origin}`);
@@ -362,6 +353,9 @@ const createCustomFetch = (headerHolder: { headers: HeadersInit }) => {
   };
 };
 
+/**
+ * Creates a Streamable HTTP transport to the target MCP server.
+ */
 const createTransport = async (
   req: express.Request,
 ): Promise<{
@@ -371,66 +365,19 @@ const createTransport = async (
   const query = req.query;
   console.log("Query parameters:", JSON.stringify(query));
 
-  const transportType = query.transportType as string;
+  const headers = getHttpHeaders(req);
+  headers["Accept"] = "text/event-stream, application/json";
+  const headerHolder = { headers };
 
-  if (transportType === "stdio") {
-    const command = (query.command as string).trim();
-    const origArgs = shellParseArgs(query.args as string) as string[];
-    const queryEnv = query.env ? JSON.parse(query.env as string) : {};
-    const env = { ...defaultEnvironment, ...process.env, ...queryEnv };
-
-    const { cmd, args } = findActualExecutable(command, origArgs);
-
-    console.log(`STDIO transport: command=${cmd}, args=${args}`);
-
-    const transport = new StdioClientTransport({
-      command: cmd,
-      args,
-      env,
-      stderr: "pipe",
-    });
-
-    await transport.start();
-    return { transport };
-  } else if (transportType === "sse") {
-    const url = query.url as string;
-
-    const headers = getHttpHeaders(req);
-    headers["Accept"] = "text/event-stream";
-    const headerHolder = { headers };
-
-    console.log(
-      `SSE transport: url=${url}, headers=${JSON.stringify(headers)}`,
-    );
-
-    const transport = new SSEClientTransport(new URL(url), {
-      eventSourceInit: {
-        fetch: createCustomFetch(headerHolder),
-      },
-      requestInit: {
-        headers: headerHolder.headers,
-      },
-    });
-    await transport.start();
-    return { transport, headerHolder };
-  } else if (transportType === "streamable-http") {
-    const headers = getHttpHeaders(req);
-    headers["Accept"] = "text/event-stream, application/json";
-    const headerHolder = { headers };
-
-    const transport = new StreamableHTTPClientTransport(
-      new URL(query.url as string),
-      {
-        // Pass a custom fetch to inject the latest headers on each request
-        fetch: createCustomFetch(headerHolder),
-      },
-    );
-    await transport.start();
-    return { transport, headerHolder };
-  } else {
-    console.error(`Invalid transport type: ${transportType}`);
-    throw new Error("Invalid transport type specified");
-  }
+  const transport = new StreamableHTTPClientTransport(
+    new URL(query.url as string),
+    {
+      // Pass a custom fetch to inject the latest headers on each request
+      fetch: createCustomFetch(headerHolder),
+    },
+  );
+  await transport.start();
+  return { transport, headerHolder };
 };
 
 app.get(
@@ -505,29 +452,79 @@ app.post(
         const { transport: serverTransport, headerHolder } =
           await createTransport(req);
 
+        // Extract detection configuration from request headers
+        const skyflowCredentials = extractSkyflowCredentials(
+          req.headers as Record<string, string | string[] | undefined>,
+        );
+        const detectionMode = extractDetectionMode(
+          req.headers as Record<string, string | string[] | undefined>,
+        );
+
+        // Mutable ref so detection events can reference the session ID
+        // after it's assigned during onsessioninitialized
+        const sessionIdRef = { value: "" };
+
         const webAppTransport = new StreamableHTTPServerTransport({
           sessionIdGenerator: randomUUID,
           onsessioninitialized: (sessionId) => {
+            sessionIdRef.value = sessionId;
             webAppTransports.set(sessionId, webAppTransport);
             serverTransports.set(sessionId, serverTransport!); // eslint-disable-line @typescript-eslint/no-non-null-assertion
             if (headerHolder) {
               sessionHeaderHolders.set(sessionId, headerHolder);
             }
             console.log("Client <-> Proxy  sessionId: " + sessionId);
+
+            if (skyflowCredentials) {
+              console.log(
+                `Detection enabled for session ${sessionId} in ${detectionMode} mode`,
+              );
+            }
           },
           onsessionclosed: (sessionId) => {
             webAppTransports.delete(sessionId);
             serverTransports.delete(sessionId);
             sessionHeaderHolders.delete(sessionId);
+            // Clean up detection event listeners
+            const listeners = detectEventListeners.get(sessionId);
+            if (listeners) {
+              for (const listener of listeners) {
+                listener.end();
+              }
+              detectEventListeners.delete(sessionId);
+            }
           },
         });
         console.log("Created StreamableHttp client transport");
 
         await webAppTransport.start();
 
+        // Build detection options if credentials are present
+        const detectionOptions = skyflowCredentials
+          ? {
+              get sessionId() {
+                return sessionIdRef.value;
+              },
+              mode: detectionMode,
+              credentials: skyflowCredentials,
+              emitEvent: (event: DetectionEvent) => {
+                // Use sessionIdRef in case event.sessionId is empty
+                const sid = event.sessionId || sessionIdRef.value;
+                const listeners = detectEventListeners.get(sid);
+                if (listeners) {
+                  const data = JSON.stringify(event);
+                  for (const listener of listeners) {
+                    listener.write(`data: ${data}\n\n`);
+                  }
+                }
+              },
+            }
+          : undefined;
+
         mcpProxy({
           transportToClient: webAppTransport,
           transportToServer: serverTransport,
+          detection: detectionOptions,
         });
 
         await (webAppTransport as StreamableHTTPServerTransport).handleRequest(
@@ -571,6 +568,14 @@ app.delete(
           webAppTransports.delete(sessionId);
           serverTransports.delete(sessionId);
           sessionHeaderHolders.delete(sessionId);
+          // Clean up detection event listeners
+          const listeners = detectEventListeners.get(sessionId);
+          if (listeners) {
+            for (const listener of listeners) {
+              listener.end();
+            }
+            detectEventListeners.delete(sessionId);
+          }
           console.log(`Transports removed for sessionId ${sessionId}`);
         }
         res.status(200).end();
@@ -578,199 +583,6 @@ app.delete(
         console.error("Error in /mcp route:", error);
         res.status(500).json(error);
       }
-    }
-  },
-);
-
-app.get(
-  "/stdio",
-  originValidationMiddleware,
-  authMiddleware,
-  async (req, res) => {
-    try {
-      console.log("New STDIO connection request");
-      const { transport: serverTransport } = await createTransport(req);
-
-      const proxyFullAddress = (req.query.proxyFullAddress as string) || "";
-      const prefix = proxyFullAddress || "";
-      const endpoint = `${prefix}/message`;
-
-      const webAppTransport = new SSEServerTransport(endpoint, res);
-      webAppTransports.set(webAppTransport.sessionId, webAppTransport);
-      console.log("Created client transport");
-
-      serverTransports.set(webAppTransport.sessionId, serverTransport);
-      console.log("Created server transport");
-
-      await webAppTransport.start();
-
-      (serverTransport as StdioClientTransport).stderr!.on("data", (chunk) => {
-        if (chunk.toString().includes("MODULE_NOT_FOUND")) {
-          // Server command not found, remove transports
-          const message = "Command not found, transports removed";
-          webAppTransport.send({
-            jsonrpc: "2.0",
-            method: "notifications/message",
-            params: {
-              level: "emergency",
-              logger: "proxy",
-              data: {
-                message,
-              },
-            },
-          });
-          webAppTransport.close();
-          serverTransport.close();
-          webAppTransports.delete(webAppTransport.sessionId);
-          serverTransports.delete(webAppTransport.sessionId);
-          sessionHeaderHolders.delete(webAppTransport.sessionId);
-          console.error(message);
-        } else {
-          // Inspect message and attempt to assign a RFC 5424 Syslog Protocol level
-          let level;
-          let message = chunk.toString().trim();
-          let ucMsg = chunk.toString().toUpperCase();
-          if (ucMsg.includes("DEBUG")) {
-            level = "debug";
-          } else if (ucMsg.includes("INFO")) {
-            level = "info";
-          } else if (ucMsg.includes("NOTICE")) {
-            level = "notice";
-          } else if (ucMsg.includes("WARN")) {
-            level = "warning";
-          } else if (ucMsg.includes("ERROR")) {
-            level = "error";
-          } else if (ucMsg.includes("CRITICAL")) {
-            level = "critical";
-          } else if (ucMsg.includes("ALERT")) {
-            level = "alert";
-          } else if (ucMsg.includes("EMERGENCY")) {
-            level = "emergency";
-          } else if (ucMsg.includes("SIGINT")) {
-            message = "SIGINT received. Server shutdown.";
-            level = "emergency";
-          } else if (ucMsg.includes("SIGHUP")) {
-            message = "SIGHUP received. Server shutdown.";
-            level = "emergency";
-          } else if (ucMsg.includes("SIGTERM")) {
-            message = "SIGTERM received. Server shutdown.";
-            level = "emergency";
-          } else {
-            level = "info";
-          }
-          webAppTransport.send({
-            jsonrpc: "2.0",
-            method: "notifications/message",
-            params: {
-              level,
-              logger: "stdio",
-              data: {
-                message,
-              },
-            },
-          });
-        }
-      });
-
-      mcpProxy({
-        transportToClient: webAppTransport,
-        transportToServer: serverTransport,
-      });
-    } catch (error) {
-      if (is401Error(error)) {
-        console.error(
-          "Received 401 Unauthorized from MCP server. Authentication failure.",
-        );
-        res.status(401).json(error);
-        return;
-      }
-      console.error("Error in /stdio route:", error);
-      res.status(500).json(error);
-    }
-  },
-);
-
-app.get(
-  "/sse",
-  originValidationMiddleware,
-  authMiddleware,
-  async (req, res) => {
-    try {
-      console.log(
-        "New SSE connection request. NOTE: The SSE transport is deprecated and has been replaced by StreamableHttp",
-      );
-      const { transport: serverTransport, headerHolder } =
-        await createTransport(req);
-
-      const proxyFullAddress = (req.query.proxyFullAddress as string) || "";
-      const prefix = proxyFullAddress || "";
-      const endpoint = `${prefix}/message`;
-
-      const webAppTransport = new SSEServerTransport(endpoint, res);
-      webAppTransports.set(webAppTransport.sessionId, webAppTransport);
-      console.log("Created client transport");
-
-      serverTransports.set(webAppTransport.sessionId, serverTransport!); // eslint-disable-line @typescript-eslint/no-non-null-assertion
-      if (headerHolder) {
-        sessionHeaderHolders.set(webAppTransport.sessionId, headerHolder);
-      }
-      console.log("Created server transport");
-
-      await webAppTransport.start();
-
-      mcpProxy({
-        transportToClient: webAppTransport,
-        transportToServer: serverTransport,
-      });
-    } catch (error) {
-      if (is401Error(error)) {
-        console.error(
-          "Received 401 Unauthorized from MCP server. Authentication failure.",
-        );
-        res.status(401).json(error);
-        return;
-      } else if (error instanceof SseError && error.code === 404) {
-        console.error(
-          "Received 404 not found from MCP server. Does the MCP server support SSE?",
-        );
-        res.status(404).json(error);
-        return;
-      } else if (JSON.stringify(error).includes("ECONNREFUSED")) {
-        console.error("Connection refused. Is the MCP server running?");
-        res.status(500).json(error);
-      }
-      console.error("Error in /sse route:", error);
-      res.status(500).json(error);
-    }
-  },
-);
-
-app.post(
-  "/message",
-  originValidationMiddleware,
-  authMiddleware,
-  async (req, res) => {
-    try {
-      const sessionId = req.query.sessionId as string;
-      console.log(`Received POST message for sessionId ${sessionId}`);
-
-      const headerHolder = sessionHeaderHolders.get(sessionId);
-      if (headerHolder) {
-        updateHeadersInPlace(
-          headerHolder.headers as Record<string, string>,
-          getHttpHeaders(req),
-        );
-      }
-
-      const transport = webAppTransports.get(sessionId) as SSEServerTransport;
-      if (!transport) {
-        res.status(404).end("Session not found");
-        return;
-      }
-      await transport.handlePostMessage(req, res);
-    } catch (error) {
-      console.error("Error in /message route:", error);
-      res.status(500).json(error);
     }
   },
 );
@@ -784,11 +596,11 @@ app.get("/health", (req, res) => {
 app.get("/config", originValidationMiddleware, authMiddleware, (req, res) => {
   try {
     res.json({
-      defaultEnvironment,
-      defaultCommand: values.command,
-      defaultArgs: values.args,
-      defaultTransport: values.transport,
-      defaultServerUrl: values["server-url"],
+      defaultEnvironment: {},
+      defaultCommand: "",
+      defaultArgs: "",
+      defaultTransport: "streamable-http",
+      defaultServerUrl: "",
     });
   } catch (error) {
     console.error("Error in /config route:", error);
@@ -816,31 +628,124 @@ app.get(
   },
 );
 
-const PORT = parseInt(
-  process.env.SERVER_PORT || DEFAULT_MCP_PROXY_LISTEN_PORT,
-  10,
-);
-const HOST = process.env.HOST || "localhost";
+// --- Detection endpoints ---
 
-const server = app.listen(PORT, HOST);
-server.on("listening", () => {
-  console.log(`⚙️ Proxy server listening on ${HOST}:${PORT}`);
-  if (!authDisabled) {
-    console.log(
-      `🔑 Session token: ${sessionToken}\n   ` +
-        `Use this token to authenticate requests or set DANGEROUSLY_OMIT_AUTH=true to disable auth`,
-    );
-  } else {
-    console.log(
-      `⚠️  WARNING: Authentication is disabled. This is not recommended.`,
-    );
-  }
-});
-server.on("error", (err) => {
-  if (err.message.includes(`EADDRINUSE`)) {
-    console.error(`❌  Proxy Server PORT IS IN USE at port ${PORT} ❌ `);
-  } else {
-    console.error(err.message);
-  }
-  process.exit(1);
-});
+/**
+ * SSE endpoint for streaming detection events to the client.
+ * Client connects with EventSource to receive real-time PII detection results.
+ */
+app.get(
+  "/detect-events/:sessionId",
+  originValidationMiddleware,
+  authMiddleware,
+  (req, res) => {
+    const sessionId = req.params.sessionId as string;
+
+    res.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
+      "Access-Control-Allow-Origin": "*",
+    });
+
+    // Register this listener
+    if (!detectEventListeners.has(sessionId)) {
+      detectEventListeners.set(sessionId, new Set());
+    }
+    detectEventListeners.get(sessionId)!.add(res);
+
+    // Send initial connection event
+    res.write(`data: ${JSON.stringify({ type: "connected", sessionId })}\n\n`);
+
+    // Heartbeat to keep connection alive
+    const heartbeat = setInterval(() => {
+      res.write(": heartbeat\n\n");
+    }, 30_000);
+
+    // Cleanup on disconnect
+    req.on("close", () => {
+      clearInterval(heartbeat);
+      const listeners = detectEventListeners.get(sessionId);
+      if (listeners) {
+        listeners.delete(res);
+        if (listeners.size === 0) {
+          detectEventListeners.delete(sessionId);
+        }
+      }
+    });
+  },
+);
+
+/**
+ * Validates Skyflow credentials without proxying any MCP traffic.
+ */
+app.post(
+  "/detect-validate",
+  originValidationMiddleware,
+  authMiddleware,
+  express.json(),
+  async (req, res) => {
+    try {
+      const { clusterId, bearerToken, vaultId } = req.body as {
+        clusterId?: string;
+        bearerToken?: string;
+        vaultId?: string;
+      };
+
+      if (!clusterId || !bearerToken || !vaultId) {
+        res.status(400).json({
+          valid: false,
+          error: "Missing required fields: clusterId, bearerToken, vaultId",
+        });
+        return;
+      }
+
+      const result = await validateCredentials({
+        clusterId,
+        bearerToken,
+        vaultId,
+      });
+      res.json(result);
+    } catch (error) {
+      res.status(500).json({
+        valid: false,
+        error: error instanceof Error ? error.message : "Validation failed",
+      });
+    }
+  },
+);
+
+// Export Express app for Vercel serverless handler
+export default app;
+
+// Allow standalone mode for local development
+if (!process.env.VERCEL) {
+  const PORT = parseInt(
+    process.env.SERVER_PORT || DEFAULT_MCP_PROXY_LISTEN_PORT,
+    10,
+  );
+  const HOST = process.env.HOST || "localhost";
+
+  const server = app.listen(PORT, HOST);
+  server.on("listening", () => {
+    console.log(`Proxy server listening on ${HOST}:${PORT}`);
+    if (!authDisabled) {
+      console.log(
+        `Session token: ${sessionToken}\n   ` +
+          `Use this token to authenticate requests or set DANGEROUSLY_OMIT_AUTH=true to disable auth`,
+      );
+    } else {
+      console.log(
+        `WARNING: Authentication is disabled. This is not recommended.`,
+      );
+    }
+  });
+  server.on("error", (err) => {
+    if (err.message.includes(`EADDRINUSE`)) {
+      console.error(`Proxy Server PORT IS IN USE at port ${PORT}`);
+    } else {
+      console.error(err.message);
+    }
+    process.exit(1);
+  });
+}

@@ -61,6 +61,7 @@ import {
   ListTodo,
   MessageSquare,
   Settings,
+  Shield,
 } from "lucide-react";
 
 import { z } from "zod";
@@ -82,9 +83,6 @@ import {
   getMCPProxyAddress,
   getMCPProxyAuthToken,
   getInitialSseUrl,
-  getInitialTransportType,
-  getInitialCommand,
-  getInitialArgs,
   initializeInspectorConfig,
   saveInspectorConfig,
   getMCPTaskTtl,
@@ -98,6 +96,8 @@ import {
   migrateFromLegacyAuth,
 } from "./lib/types/customHeaders";
 import MetadataTab from "./components/MetadataTab";
+import DetectTab from "./components/DetectTab";
+import { useDetection } from "./lib/hooks/useDetection";
 
 const CONFIG_LOCAL_STORAGE_KEY = "inspectorConfig_v1";
 
@@ -143,13 +143,7 @@ const App = () => {
     tools: null,
     tasks: null,
   });
-  const [command, setCommand] = useState<string>(getInitialCommand);
-  const [args, setArgs] = useState<string>(getInitialArgs);
-
   const [sseUrl, setSseUrl] = useState<string>(getInitialSseUrl);
-  const [transportType, setTransportType] = useState<
-    "stdio" | "sse" | "streamable-http"
-  >(getInitialTransportType);
   const [connectionType, setConnectionType] = useState<"direct" | "proxy">(
     () => {
       return (
@@ -161,11 +155,27 @@ const App = () => {
   const [logLevel, setLogLevel] = useState<LoggingLevel>("debug");
   const [notifications, setNotifications] = useState<ServerNotification[]>([]);
   const [roots, setRoots] = useState<Root[]>([]);
-  const [env, setEnv] = useState<Record<string, string>>({});
 
   const [config, setConfig] = useState<InspectorConfig>(() =>
     initializeInspectorConfig(CONFIG_LOCAL_STORAGE_KEY),
   );
+
+  const {
+    skyflowConfig,
+    setSkyflowConfig,
+    detectionMode,
+    setDetectionMode,
+    validationStatus,
+    validationError,
+    validateCredentials,
+    detectionEvents,
+    aggregateStats,
+    connectEventStream,
+    disconnectEventStream,
+    resetDetection,
+    getDetectionHeaders,
+  } = useDetection(config);
+
   const [bearerToken, setBearerToken] = useState<string>(() => {
     return localStorage.getItem("lastBearerToken") || "";
   });
@@ -320,6 +330,7 @@ const App = () => {
       "roots",
       "auth",
       "metadata",
+      "detect",
     ];
 
     if (!validTabs.includes(originatingTab)) return;
@@ -350,6 +361,7 @@ const App = () => {
     serverCapabilities,
     serverImplementation,
     mcpClient,
+    mcpSessionId,
     requestHistory,
     clearRequestHistory,
     makeRequest,
@@ -361,11 +373,7 @@ const App = () => {
     connect: connectMcpServer,
     disconnect: disconnectMcpServer,
   } = useConnection({
-    transportType,
-    command,
-    args,
     sseUrl,
-    env,
     customHeaders,
     oauthClientId,
     oauthClientSecret,
@@ -436,6 +444,7 @@ const App = () => {
     getRoots: () => rootsRef.current,
     defaultLoggingLevel: logLevel,
     metadata,
+    extraProxyHeaders: getDetectionHeaders(),
   });
 
   useEffect(() => {
@@ -489,21 +498,30 @@ const App = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mcpClient, activeTab, serverCapabilities?.tools]);
 
+  // Connect/disconnect detection event stream based on MCP session
   useEffect(() => {
-    localStorage.setItem("lastCommand", command);
-  }, [command]);
+    if (mcpClient && mcpSessionId) {
+      connectEventStream(mcpSessionId);
+    } else {
+      disconnectEventStream();
+    }
+    return () => {
+      disconnectEventStream();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mcpClient, mcpSessionId]);
 
+  // Reset detection state when disconnecting
   useEffect(() => {
-    localStorage.setItem("lastArgs", args);
-  }, [args]);
+    if (!mcpClient) {
+      resetDetection();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [mcpClient]);
 
   useEffect(() => {
     localStorage.setItem("lastSseUrl", sseUrl);
   }, [sseUrl]);
-
-  useEffect(() => {
-    localStorage.setItem("lastTransportType", transportType);
-  }, [transportType]);
 
   useEffect(() => {
     localStorage.setItem("lastConnectionType", connectionType);
@@ -675,25 +693,11 @@ const App = () => {
     fetch(`${getMCPProxyAddress(config)}/config`, { headers })
       .then((response) => response.json())
       .then((data) => {
-        setEnv(data.defaultEnvironment);
-        if (data.defaultCommand) {
-          setCommand(data.defaultCommand);
-        }
-        if (data.defaultArgs) {
-          setArgs(data.defaultArgs);
-        }
-        if (data.defaultTransport) {
-          setTransportType(
-            data.defaultTransport as "stdio" | "sse" | "streamable-http",
-          );
-        }
         if (data.defaultServerUrl) {
           setSseUrl(data.defaultServerUrl);
         }
       })
-      .catch((error) =>
-        console.error("Error fetching default environment:", error),
-      );
+      .catch((error) => console.error("Error fetching default config:", error));
   }, [config]);
 
   useEffect(() => {
@@ -1267,16 +1271,8 @@ const App = () => {
       >
         <Sidebar
           connectionStatus={connectionStatus}
-          transportType={transportType}
-          setTransportType={setTransportType}
-          command={command}
-          setCommand={setCommand}
-          args={args}
-          setArgs={setArgs}
           sseUrl={sseUrl}
           setSseUrl={setSseUrl}
-          env={env}
-          setEnv={setEnv}
           config={config}
           setConfig={setConfig}
           customHeaders={customHeaders}
@@ -1295,6 +1291,13 @@ const App = () => {
           connectionType={connectionType}
           setConnectionType={setConnectionType}
           serverImplementation={serverImplementation}
+          skyflowConfig={skyflowConfig}
+          setSkyflowConfig={setSkyflowConfig}
+          detectionMode={detectionMode}
+          setDetectionMode={setDetectionMode}
+          validationStatus={validationStatus}
+          validationError={validationError}
+          onValidateCredentials={validateCredentials}
         />
         <div
           onMouseDown={handleSidebarDragStart}
@@ -1389,6 +1392,10 @@ const App = () => {
                 <TabsTrigger value="metadata">
                   <Settings className="w-4 h-4 mr-2" />
                   Metadata
+                </TabsTrigger>
+                <TabsTrigger value="detect">
+                  <Shield className="w-4 h-4 mr-2" />
+                  Detect
                 </TabsTrigger>
               </TabsList>
 
@@ -1587,6 +1594,10 @@ const App = () => {
                     <MetadataTab
                       metadata={metadata}
                       onMetadataChange={handleMetadataChange}
+                    />
+                    <DetectTab
+                      events={detectionEvents}
+                      stats={aggregateStats}
                     />
                   </>
                 )}

@@ -16,6 +16,9 @@ import {
   CheckCheck,
   Server,
 } from "lucide-react";
+import SkyflowConfigPanel from "./SkyflowConfig";
+import ModeSelector from "./ModeSelector";
+import type { SkyflowConfig, DetectionMode } from "@/lib/hooks/useDetection";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -45,16 +48,8 @@ import IconDisplay, { WithIcons } from "./IconDisplay";
 
 interface SidebarProps {
   connectionStatus: ConnectionStatus;
-  transportType: "stdio" | "sse" | "streamable-http";
-  setTransportType: (type: "stdio" | "sse" | "streamable-http") => void;
-  command: string;
-  setCommand: (command: string) => void;
-  args: string;
-  setArgs: (args: string) => void;
   sseUrl: string;
   setSseUrl: (url: string) => void;
-  env: Record<string, string>;
-  setEnv: (env: Record<string, string>) => void;
   // Custom headers support
   customHeaders: CustomHeadersType;
   setCustomHeaders: (headers: CustomHeadersType) => void;
@@ -76,20 +71,20 @@ interface SidebarProps {
   serverImplementation?:
     | (WithIcons & { name?: string; version?: string; websiteUrl?: string })
     | null;
+  // Detection
+  skyflowConfig: SkyflowConfig;
+  setSkyflowConfig: (config: SkyflowConfig) => void;
+  detectionMode: DetectionMode;
+  setDetectionMode: (mode: DetectionMode) => void;
+  validationStatus: "unconfigured" | "validating" | "valid" | "invalid";
+  validationError: string;
+  onValidateCredentials: () => void;
 }
 
 const Sidebar = ({
   connectionStatus,
-  transportType,
-  setTransportType,
-  command,
-  setCommand,
-  args,
-  setArgs,
   sseUrl,
   setSseUrl,
-  env,
-  setEnv,
   customHeaders,
   setCustomHeaders,
   oauthClientId,
@@ -108,12 +103,17 @@ const Sidebar = ({
   connectionType,
   setConnectionType,
   serverImplementation,
+  skyflowConfig,
+  setSkyflowConfig,
+  detectionMode,
+  setDetectionMode,
+  validationStatus,
+  validationError,
+  onValidateCredentials,
 }: SidebarProps) => {
   const [theme, setTheme] = useTheme();
-  const [showEnvVars, setShowEnvVars] = useState(false);
   const [showAuthConfig, setShowAuthConfig] = useState(false);
   const [showConfig, setShowConfig] = useState(false);
-  const [shownEnvVars, setShownEnvVars] = useState<Set<string>>(new Set());
   const [showClientSecret, setShowClientSecret] = useState(false);
   const [copiedServerEntry, setCopiedServerEntry] = useState(false);
   const [copiedServerFile, setCopiedServerFile] = useState(false);
@@ -135,29 +135,12 @@ const Sidebar = ({
 
   // Shared utility function to generate server config
   const generateServerConfig = useCallback(() => {
-    if (transportType === "stdio") {
-      return {
-        command,
-        args: args.trim() ? args.split(/\s+/) : [],
-        env: { ...env },
-      };
-    }
-    if (transportType === "sse") {
-      return {
-        type: "sse",
-        url: sseUrl,
-        note: "For SSE connections, add this URL directly in your MCP Client",
-      };
-    }
-    if (transportType === "streamable-http") {
-      return {
-        type: "streamable-http",
-        url: sseUrl,
-        note: "For Streamable HTTP connections, add this URL directly in your MCP Client",
-      };
-    }
-    return {};
-  }, [transportType, command, args, env, sseUrl]);
+    return {
+      type: "streamable-http",
+      url: sseUrl,
+      note: "For Streamable HTTP connections, add this URL directly in your MCP Client",
+    };
+  }, [sseUrl]);
 
   // Memoized config entry generator
   const generateMCPServerEntry = useCallback(() => {
@@ -189,11 +172,7 @@ const Sidebar = ({
           toast({
             title: "Config entry copied",
             description:
-              transportType === "stdio"
-                ? "Server configuration has been copied to clipboard. Add this to your mcp.json inside the 'mcpServers' object with your preferred server name."
-                : transportType === "streamable-http"
-                  ? "Streamable HTTP URL has been copied. Use this URL directly in your MCP Client."
-                  : "SSE URL has been copied. Use this URL directly in your MCP Client.",
+              "Streamable HTTP URL has been copied. Use this URL directly in your MCP Client.",
           });
 
           setTimeout(() => {
@@ -206,7 +185,7 @@ const Sidebar = ({
     } catch (error) {
       reportError(error);
     }
-  }, [generateMCPServerEntry, transportType, toast, reportError]);
+  }, [generateMCPServerEntry, toast, reportError]);
 
   const handleCopyServerFile = useCallback(() => {
     try {
@@ -239,7 +218,7 @@ const Sidebar = ({
       <div className="flex items-center justify-between p-4 border-b border-gray-200 dark:border-border">
         <div className="flex items-center">
           <h1 className="ml-2 text-lg font-semibold">
-            MCP Inspector v{version}
+            MCP Detector v{version}
           </h1>
         </div>
       </div>
@@ -247,80 +226,18 @@ const Sidebar = ({
       <div className="p-4 flex-1 overflow-auto">
         <div className="space-y-4">
           <div className="space-y-2">
-            <label
-              className="text-sm font-medium"
-              htmlFor="transport-type-select"
-            >
-              Transport Type
+            <label className="text-sm font-medium">
+              Transport: Streamable HTTP
             </label>
-            <Select
-              value={transportType}
-              onValueChange={(value: "stdio" | "sse" | "streamable-http") =>
-                setTransportType(value)
-              }
-            >
-              <SelectTrigger id="transport-type-select">
-                <SelectValue placeholder="Select transport type" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="stdio">STDIO</SelectItem>
-                <SelectItem value="sse">SSE</SelectItem>
-                <SelectItem value="streamable-http">Streamable HTTP</SelectItem>
-              </SelectContent>
-            </Select>
           </div>
 
-          {transportType === "stdio" ? (
-            <>
-              <div className="space-y-2">
-                <label className="text-sm font-medium" htmlFor="command-input">
-                  Command
-                </label>
-                <Input
-                  id="command-input"
-                  placeholder="Command"
-                  value={command}
-                  onChange={(e) => setCommand(e.target.value)}
-                  onBlur={(e) => setCommand(e.target.value.trim())}
-                  className="font-mono"
-                />
-              </div>
-              <div className="space-y-2">
-                <label
-                  className="text-sm font-medium"
-                  htmlFor="arguments-input"
-                >
-                  Arguments
-                </label>
-                <Input
-                  id="arguments-input"
-                  placeholder="Arguments (space-separated)"
-                  value={args}
-                  onChange={(e) => setArgs(e.target.value)}
-                  className="font-mono"
-                />
-              </div>
-            </>
-          ) : (
-            <>
-              <div className="space-y-2">
-                <label className="text-sm font-medium" htmlFor="sse-url-input">
-                  URL
-                </label>
-                {sseUrl ? (
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Input
-                        id="sse-url-input"
-                        placeholder="URL"
-                        value={sseUrl}
-                        onChange={(e) => setSseUrl(e.target.value)}
-                        className="font-mono"
-                      />
-                    </TooltipTrigger>
-                    <TooltipContent>{sseUrl}</TooltipContent>
-                  </Tooltip>
-                ) : (
+          <div className="space-y-2">
+            <label className="text-sm font-medium" htmlFor="sse-url-input">
+              URL
+            </label>
+            {sseUrl ? (
+              <Tooltip>
+                <TooltipTrigger asChild>
                   <Input
                     id="sse-url-input"
                     placeholder="URL"
@@ -328,166 +245,50 @@ const Sidebar = ({
                     onChange={(e) => setSseUrl(e.target.value)}
                     className="font-mono"
                   />
-                )}
-              </div>
-
-              {/* Connection Type switch - only visible for non-STDIO transport types */}
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <div className="space-y-2">
-                    <label
-                      className="text-sm font-medium"
-                      htmlFor="connection-type-select"
-                    >
-                      Connection Type
-                    </label>
-                    <Select
-                      value={connectionType}
-                      onValueChange={(value: "direct" | "proxy") =>
-                        setConnectionType(value)
-                      }
-                    >
-                      <SelectTrigger id="connection-type-select">
-                        <SelectValue placeholder="Select connection type" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="proxy">Via Proxy</SelectItem>
-                        <SelectItem value="direct">Direct</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
                 </TooltipTrigger>
-                <TooltipContent>{connectionTypeTip}</TooltipContent>
+                <TooltipContent>{sseUrl}</TooltipContent>
               </Tooltip>
-            </>
-          )}
+            ) : (
+              <Input
+                id="sse-url-input"
+                placeholder="URL"
+                value={sseUrl}
+                onChange={(e) => setSseUrl(e.target.value)}
+                className="font-mono"
+              />
+            )}
+          </div>
 
-          {transportType === "stdio" && (
-            <div className="space-y-2">
-              <Button
-                variant="outline"
-                onClick={() => setShowEnvVars(!showEnvVars)}
-                className="flex items-center w-full"
-                data-testid="env-vars-button"
-                aria-expanded={showEnvVars}
-              >
-                {showEnvVars ? (
-                  <ChevronDown className="w-4 h-4 mr-2" />
-                ) : (
-                  <ChevronRight className="w-4 h-4 mr-2" />
-                )}
-                Environment Variables
-              </Button>
-              {showEnvVars && (
-                <div className="space-y-2">
-                  {Object.entries(env).map(([key, value], idx) => (
-                    <div key={idx} className="space-y-2 pb-4">
-                      <div className="flex gap-2">
-                        <Input
-                          aria-label={`Environment variable key ${idx + 1}`}
-                          placeholder="Key"
-                          value={key}
-                          onChange={(e) => {
-                            const newKey = e.target.value;
-                            const newEnv = Object.entries(env).reduce(
-                              (acc, [k, v]) => {
-                                if (k === key) {
-                                  acc[newKey] = value;
-                                } else {
-                                  acc[k] = v;
-                                }
-                                return acc;
-                              },
-                              {} as Record<string, string>,
-                            );
-                            setEnv(newEnv);
-                            setShownEnvVars((prev) => {
-                              const next = new Set(prev);
-                              if (next.has(key)) {
-                                next.delete(key);
-                                next.add(newKey);
-                              }
-                              return next;
-                            });
-                          }}
-                          className="font-mono"
-                        />
-                        <Button
-                          variant="destructive"
-                          size="icon"
-                          className="h-9 w-9 p-0 shrink-0"
-                          onClick={() => {
-                            // eslint-disable-next-line @typescript-eslint/no-unused-vars
-                            const { [key]: _removed, ...rest } = env;
-                            setEnv(rest);
-                          }}
-                        >
-                          ×
-                        </Button>
-                      </div>
-                      <div className="flex gap-2">
-                        <Input
-                          aria-label={`Environment variable value ${idx + 1}`}
-                          type={shownEnvVars.has(key) ? "text" : "password"}
-                          placeholder="Value"
-                          value={value}
-                          onChange={(e) => {
-                            const newEnv = { ...env };
-                            newEnv[key] = e.target.value;
-                            setEnv(newEnv);
-                          }}
-                          className="font-mono"
-                        />
-                        <Button
-                          variant="outline"
-                          size="icon"
-                          className="h-9 w-9 p-0 shrink-0"
-                          onClick={() => {
-                            setShownEnvVars((prev) => {
-                              const next = new Set(prev);
-                              if (next.has(key)) {
-                                next.delete(key);
-                              } else {
-                                next.add(key);
-                              }
-                              return next;
-                            });
-                          }}
-                          aria-label={
-                            shownEnvVars.has(key) ? "Hide value" : "Show value"
-                          }
-                          aria-pressed={shownEnvVars.has(key)}
-                          title={
-                            shownEnvVars.has(key) ? "Hide value" : "Show value"
-                          }
-                        >
-                          {shownEnvVars.has(key) ? (
-                            <Eye className="h-4 w-4" aria-hidden="true" />
-                          ) : (
-                            <EyeOff className="h-4 w-4" aria-hidden="true" />
-                          )}
-                        </Button>
-                      </div>
-                    </div>
-                  ))}
-                  <Button
-                    variant="outline"
-                    className="w-full mt-2"
-                    onClick={() => {
-                      const key = "";
-                      const newEnv = { ...env };
-                      newEnv[key] = "";
-                      setEnv(newEnv);
-                    }}
-                  >
-                    Add Environment Variable
-                  </Button>
-                </div>
-              )}
-            </div>
-          )}
+          {/* Connection Type switch */}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <div className="space-y-2">
+                <label
+                  className="text-sm font-medium"
+                  htmlFor="connection-type-select"
+                >
+                  Connection Type
+                </label>
+                <Select
+                  value={connectionType}
+                  onValueChange={(value: "direct" | "proxy") =>
+                    setConnectionType(value)
+                  }
+                >
+                  <SelectTrigger id="connection-type-select">
+                    <SelectValue placeholder="Select connection type" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="proxy">Via Proxy</SelectItem>
+                    <SelectItem value="direct">Direct</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </TooltipTrigger>
+            <TooltipContent>{connectionTypeTip}</TooltipContent>
+          </Tooltip>
 
-          {/* Always show both copy buttons for all transport types */}
+          {/* Copy buttons */}
           <div className="grid grid-cols-2 gap-2 mt-2">
             <Tooltip>
               <TooltipTrigger asChild>
@@ -551,76 +352,90 @@ const Sidebar = ({
                     onChange={setCustomHeaders}
                   />
                 </div>
-                {transportType !== "stdio" && (
-                  // OAuth Configuration
-                  <div className="space-y-2 p-3  rounded border">
-                    <h4 className="text-sm font-semibold flex items-center">
-                      OAuth 2.0 Flow
-                    </h4>
-                    <div className="space-y-2">
-                      <label className="text-sm font-medium">Client ID</label>
+                {/* OAuth Configuration */}
+                <div className="space-y-2 p-3  rounded border">
+                  <h4 className="text-sm font-semibold flex items-center">
+                    OAuth 2.0 Flow
+                  </h4>
+                  <div className="space-y-2">
+                    <label className="text-sm font-medium">Client ID</label>
+                    <Input
+                      placeholder="Client ID"
+                      onChange={(e) => setOauthClientId(e.target.value)}
+                      value={oauthClientId}
+                      data-testid="oauth-client-id-input"
+                      className="font-mono"
+                    />
+                    <label className="text-sm font-medium">Client Secret</label>
+                    <div className="flex gap-2">
                       <Input
-                        placeholder="Client ID"
-                        onChange={(e) => setOauthClientId(e.target.value)}
-                        value={oauthClientId}
-                        data-testid="oauth-client-id-input"
+                        type={showClientSecret ? "text" : "password"}
+                        placeholder="Client Secret (optional)"
+                        onChange={(e) => setOauthClientSecret(e.target.value)}
+                        value={oauthClientSecret}
+                        data-testid="oauth-client-secret-input"
                         className="font-mono"
                       />
-                      <label className="text-sm font-medium">
-                        Client Secret
-                      </label>
-                      <div className="flex gap-2">
-                        <Input
-                          type={showClientSecret ? "text" : "password"}
-                          placeholder="Client Secret (optional)"
-                          onChange={(e) => setOauthClientSecret(e.target.value)}
-                          value={oauthClientSecret}
-                          data-testid="oauth-client-secret-input"
-                          className="font-mono"
-                        />
-                        <Button
-                          variant="outline"
-                          size="icon"
-                          className="h-9 w-9 p-0 shrink-0"
-                          onClick={() => setShowClientSecret(!showClientSecret)}
-                          aria-label={
-                            showClientSecret ? "Hide secret" : "Show secret"
-                          }
-                          aria-pressed={showClientSecret}
-                          title={
-                            showClientSecret ? "Hide secret" : "Show secret"
-                          }
-                        >
-                          {showClientSecret ? (
-                            <Eye className="h-4 w-4" aria-hidden="true" />
-                          ) : (
-                            <EyeOff className="h-4 w-4" aria-hidden="true" />
-                          )}
-                        </Button>
-                      </div>
-                      <label className="text-sm font-medium">
-                        Redirect URL
-                      </label>
-                      <Input
-                        readOnly
-                        placeholder="Redirect URL"
-                        value={window.location.origin + "/oauth/callback"}
-                        className="font-mono"
-                      />
-                      <label className="text-sm font-medium">Scope</label>
-                      <Input
-                        placeholder="Scope (space-separated)"
-                        onChange={(e) => setOauthScope(e.target.value)}
-                        value={oauthScope}
-                        data-testid="oauth-scope-input"
-                        className="font-mono"
-                      />
+                      <Button
+                        variant="outline"
+                        size="icon"
+                        className="h-9 w-9 p-0 shrink-0"
+                        onClick={() => setShowClientSecret(!showClientSecret)}
+                        aria-label={
+                          showClientSecret ? "Hide secret" : "Show secret"
+                        }
+                        aria-pressed={showClientSecret}
+                        title={showClientSecret ? "Hide secret" : "Show secret"}
+                      >
+                        {showClientSecret ? (
+                          <Eye className="h-4 w-4" aria-hidden="true" />
+                        ) : (
+                          <EyeOff className="h-4 w-4" aria-hidden="true" />
+                        )}
+                      </Button>
                     </div>
+                    <label className="text-sm font-medium">Redirect URL</label>
+                    <Input
+                      readOnly
+                      placeholder="Redirect URL"
+                      value={window.location.origin + "/oauth/callback"}
+                      className="font-mono"
+                    />
+                    <label className="text-sm font-medium">Scope</label>
+                    <Input
+                      placeholder="Scope (space-separated)"
+                      onChange={(e) => setOauthScope(e.target.value)}
+                      value={oauthScope}
+                      data-testid="oauth-scope-input"
+                      className="font-mono"
+                    />
                   </div>
-                )}
+                </div>
               </>
             )}
           </div>
+          {/* Detection Config */}
+          <div className="space-y-2">
+            <div className="p-3 rounded border space-y-3">
+              <SkyflowConfigPanel
+                config={skyflowConfig}
+                onChange={setSkyflowConfig}
+                validationStatus={validationStatus}
+                validationError={validationError}
+                onValidate={onValidateCredentials}
+              />
+              <ModeSelector
+                mode={detectionMode}
+                onChange={setDetectionMode}
+                disabled={
+                  !skyflowConfig.clusterId ||
+                  !skyflowConfig.bearerToken ||
+                  !skyflowConfig.vaultId
+                }
+              />
+            </div>
+          </div>
+
           {/* Configuration */}
           <div className="space-y-2">
             <Button
@@ -731,7 +546,7 @@ const Sidebar = ({
                   }}
                 >
                   <RotateCcw className="w-4 h-4 mr-2" />
-                  {transportType === "stdio" ? "Restart" : "Reconnect"}
+                  Reconnect
                 </Button>
                 <Button onClick={onDisconnect}>
                   <RefreshCwOff className="w-4 h-4 mr-2" />
