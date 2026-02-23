@@ -4,7 +4,9 @@
       "Bash(npm run build-server:*)",
       "Bash(npm run build-client:*)",
       "Bash(npx prettier:*)",
-      "Bash(npm run build:*)"
+      "Bash(npm run build:*)",
+      "Bash(npm ls:*)",
+      "Bash(grep:*)"
     ]
   },
   "enabledPlugins": {

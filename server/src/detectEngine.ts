@@ -1,10 +1,11 @@
 /**
  * Detection engine that wraps MCP proxy message handlers with
- * Skyflow Detect API integration. Supports three modes:
+ * Skyflow Detect API integration. Supports four modes:
  *
- * - log:   Forward immediately, detect async, emit results
- * - warn:  Same as log but with severity: "warn"
- * - error: Detect first, block if PII found, forward only if clean
+ * - log:      Forward immediately, detect async, emit results
+ * - warn:     Same as log but with severity: "warn"
+ * - error:    Detect first, block if PII found, forward only if clean
+ * - tokenize: Detect first, replace PII with Skyflow tokens, then forward
  */
 
 import { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
@@ -17,6 +18,7 @@ import type {
   DetectionEvent,
   DetectionResult,
   SkyflowCredentials,
+  SkyflowEntity,
 } from "./types.js";
 
 export type DetectionEventEmitter = (event: DetectionEvent) => void;
@@ -89,6 +91,7 @@ function createEvent(
   result: DetectionResult,
   blocked: boolean,
   mode: DetectionMode,
+  tokenized?: boolean,
 ): DetectionEvent {
   return {
     id: randomUUID(),
@@ -97,8 +100,14 @@ function createEvent(
     direction,
     result,
     blocked,
-    severity: mode === "error" ? "error" : mode === "warn" ? "warn" : "info",
+    severity:
+      mode === "error"
+        ? "error"
+        : mode === "warn" || mode === "tokenize"
+          ? "warn"
+          : "info",
     mode,
+    ...(tokenized !== undefined ? { tokenized } : {}),
   };
 }
 
@@ -143,6 +152,7 @@ function createServiceUnavailableError(
  *
  * For log/warn mode: Messages are forwarded immediately; detection runs async.
  * For error mode: Messages are held until detection completes; blocked if PII found.
+ * For tokenize mode: Messages are held until detection completes; PII replaced with tokens before forwarding.
  */
 export function wrapWithDetection(
   transportToClient: Transport,
@@ -161,6 +171,18 @@ export function wrapWithDetection(
     if (mode === "error") {
       // Error mode: detect synchronously before forwarding
       handleErrorMode(
+        message,
+        text,
+        direction,
+        transportToServer,
+        transportToClient,
+        sessionId,
+        credentials,
+        emitEvent,
+      );
+    } else if (mode === "tokenize") {
+      // Tokenize mode: detect synchronously, replace PII with tokens before forwarding
+      handleTokenizeMode(
         message,
         text,
         direction,
@@ -198,6 +220,18 @@ export function wrapWithDetection(
         credentials,
         emitEvent,
       );
+    } else if (mode === "tokenize") {
+      // Tokenize mode: detect synchronously, replace PII with tokens before forwarding
+      handleTokenizeMode(
+        message,
+        text,
+        direction,
+        transportToClient,
+        null, // no error response target for server→client
+        sessionId,
+        credentials,
+        emitEvent,
+      );
     } else {
       // Log/Warn mode: forward immediately, detect async
       transportToClient.send(message).catch((error) => {
@@ -226,12 +260,132 @@ function detectAndEmit(
 ): void {
   detectPii(text, credentials)
     .then((result) => {
-      if (result.hasPii) {
-        emitEvent(createEvent(sessionId, direction, result, false, mode));
-      }
+      // Emit for all scanned messages so the Detect tab can track
+      // total scanned, clean, and detected counts
+      emitEvent(createEvent(sessionId, direction, result, false, mode));
     })
     .catch((error) => {
       console.error(`Detection error (${mode} mode, non-blocking):`, error);
+    });
+}
+
+/**
+ * Replaces PII values in a JSON-RPC message with their Skyflow tokens.
+ * Works by performing string replacement on the serialized JSON.
+ * Returns the modified message, or the original if replacement produces invalid JSON.
+ */
+function tokenizeMessage(
+  message: JSONRPCMessage,
+  entities: SkyflowEntity[],
+): JSONRPCMessage {
+  if (entities.length === 0) return message;
+
+  let serialized = JSON.stringify(message);
+
+  // Sort entities by value length descending to avoid partial matches
+  // e.g., "John Smith" should be replaced before "John"
+  const sortedEntities = [...entities].sort(
+    (a, b) => b.value.length - a.value.length,
+  );
+
+  for (const entity of sortedEntities) {
+    // JSON-escape both value and token for safe replacement in serialized JSON
+    const escapedValue = JSON.stringify(entity.value).slice(1, -1);
+    const escapedToken = JSON.stringify(entity.token).slice(1, -1);
+    // Use split/join for literal string replacement (no regex escaping needed)
+    serialized = serialized.split(escapedValue).join(escapedToken);
+  }
+
+  try {
+    return JSON.parse(serialized) as JSONRPCMessage;
+  } catch {
+    console.error(
+      "Tokenization produced invalid JSON, forwarding original message",
+    );
+    return message;
+  }
+}
+
+/**
+ * Synchronous detection for tokenize mode. Replaces PII with Skyflow tokens before forwarding.
+ * Fail-closed: if detection service is unavailable, message is blocked.
+ */
+function handleTokenizeMode(
+  message: JSONRPCMessage,
+  text: string,
+  direction: DetectionDirection,
+  forwardTo: Transport,
+  errorResponseTo: Transport | null,
+  sessionId: string,
+  credentials: SkyflowCredentials,
+  emitEvent: DetectionEventEmitter,
+): void {
+  if (!text.trim()) {
+    // No text to scan, forward immediately
+    forwardTo.send(message).catch((error) => {
+      console.error("Error forwarding message:", error);
+    });
+    return;
+  }
+
+  const messageId = (message as any).id;
+
+  detectPii(text, credentials)
+    .then((result) => {
+      if (result.hasPii) {
+        // Tokenize and forward
+        const tokenizedMessage = tokenizeMessage(message, result.entities);
+        emitEvent(
+          createEvent(sessionId, direction, result, false, "tokenize", true),
+        );
+        forwardTo.send(tokenizedMessage).catch((error) => {
+          console.error("Error forwarding tokenized message:", error);
+        });
+      } else {
+        // Clean — forward unchanged
+        emitEvent(
+          createEvent(sessionId, direction, result, false, "tokenize", false),
+        );
+        forwardTo.send(message).catch((error) => {
+          console.error("Error forwarding clean message:", error);
+        });
+      }
+    })
+    .catch((error) => {
+      // Fail-closed: block message if detection service is unavailable
+      console.error(
+        "Detection service error (tokenize mode, fail-closed):",
+        error,
+      );
+
+      emitEvent(
+        createEvent(
+          sessionId,
+          direction,
+          {
+            entities: [],
+            originalText: text,
+            processedText: "",
+            hasPii: false,
+            entityCount: 0,
+          },
+          true,
+          "tokenize",
+          false,
+        ),
+      );
+
+      if (messageId !== undefined && errorResponseTo) {
+        const errorMsg =
+          error instanceof SkyflowClientError
+            ? error.message
+            : "Detection service unavailable";
+        errorResponseTo
+          .send(createServiceUnavailableError(messageId, errorMsg))
+          .catch((err) =>
+            console.error("Error sending service unavailable response:", err),
+          );
+      }
     });
 }
 

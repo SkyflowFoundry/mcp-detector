@@ -610,11 +610,30 @@ export function useConnection({
         );
         transportOptions = {
           authProvider: serverAuthProvider,
-          fetch: (url: string | URL | globalThis.Request, init?: RequestInit) =>
-            fetch(url, {
+          fetch: async (
+            url: string | URL | globalThis.Request,
+            init?: RequestInit,
+          ) => {
+            // Merge SDK headers with our proxy/custom headers.
+            // The SDK sets critical headers (accept, content-type, mcp-session-id)
+            // that must be preserved — spread them first, then overlay ours.
+            const mergedHeaders = new Headers(init?.headers);
+            for (const [key, value] of Object.entries({
+              ...headers,
+              ...proxyHeaders,
+            })) {
+              mergedHeaders.set(key, value as string);
+            }
+            const response = await fetch(url, {
               ...init,
-              headers: { ...headers, ...proxyHeaders },
-            }),
+              headers: mergedHeaders,
+            });
+
+            // Capture session ID from response for detection SSE stream
+            captureResponseHeaders(response);
+
+            return response;
+          },
           requestInit: {
             headers: { ...headers, ...proxyHeaders },
           },

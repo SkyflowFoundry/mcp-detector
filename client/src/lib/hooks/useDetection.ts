@@ -4,7 +4,7 @@ import type { InspectorConfig } from "@/lib/configurationTypes";
 
 // --- Types mirrored from server/src/types.ts ---
 
-export type DetectionMode = "log" | "warn" | "error";
+export type DetectionMode = "log" | "warn" | "error" | "tokenize";
 
 export interface SkyflowConfig {
   clusterId: string;
@@ -46,12 +46,14 @@ export interface DetectionEvent {
   blocked: boolean;
   severity: "info" | "warn" | "error";
   mode: DetectionMode;
+  tokenized?: boolean;
 }
 
 export interface AggregateStats {
   totalScanned: number;
   totalDetected: number;
   totalBlocked: number;
+  totalTokenized: number;
   totalClean: number;
   byType: Record<string, number>;
   byDirection: {
@@ -64,6 +66,7 @@ const EMPTY_STATS: AggregateStats = {
   totalScanned: 0,
   totalDetected: 0,
   totalBlocked: 0,
+  totalTokenized: 0,
   totalClean: 0,
   byType: {},
   byDirection: { clientToServer: 0, serverToClient: 0 },
@@ -176,9 +179,13 @@ export function useDetection(inspectorConfig: InspectorConfig) {
       if (!isConfigured || !sessionId) return;
 
       const proxyAddress = getMCPProxyAddress(inspectorConfig);
-      const url = `${proxyAddress}/detect-events/${sessionId}`;
+      const { token: proxyAuthToken } = getMCPProxyAuthToken(inspectorConfig);
+      const sseUrl = new URL(`${proxyAddress}/detect-events/${sessionId}`);
+      if (proxyAuthToken) {
+        sseUrl.searchParams.set("token", proxyAuthToken);
+      }
 
-      const eventSource = new EventSource(url);
+      const eventSource = new EventSource(sseUrl.toString());
       eventSourceRef.current = eventSource;
 
       eventSource.onmessage = (event) => {
@@ -200,6 +207,9 @@ export function useDetection(inspectorConfig: InspectorConfig) {
             }
             if (detectionEvent.blocked) {
               updated.totalBlocked++;
+            }
+            if (detectionEvent.tokenized) {
+              updated.totalTokenized++;
             }
 
             // By entity type

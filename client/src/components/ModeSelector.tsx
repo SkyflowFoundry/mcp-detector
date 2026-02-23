@@ -36,13 +36,21 @@ const MODE_CONFIG: {
     color: "border-red-300 dark:border-red-700",
     activeColor: "border-red-500 bg-red-50 dark:bg-red-950 dark:border-red-500",
   },
+  {
+    value: "tokenize",
+    label: "Tokenize",
+    description: "Replace PII with Skyflow tokens",
+    color: "border-blue-300 dark:border-blue-700",
+    activeColor:
+      "border-blue-500 bg-blue-50 dark:bg-blue-950 dark:border-blue-500",
+  },
 ];
 
 const ModeSelector = ({ mode, onChange, disabled }: ModeSelectorProps) => {
   return (
     <div className="space-y-2">
       <h4 className="text-sm font-semibold">Detection Mode</h4>
-      <div className="grid grid-cols-3 gap-2">
+      <div className="grid grid-cols-4 gap-2">
         {MODE_CONFIG.map(
           ({ value, label, description, color, activeColor }) => (
             <button

@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import {
   Play,
   ChevronDown,
@@ -45,6 +45,14 @@ import CustomHeaders from "./CustomHeaders";
 import { CustomHeaders as CustomHeadersType } from "@/lib/types/customHeaders";
 import { useToast } from "../lib/hooks/useToast";
 import IconDisplay, { WithIcons } from "./IconDisplay";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from "@/components/ui/dialog";
 
 interface SidebarProps {
   connectionStatus: ConnectionStatus;
@@ -118,6 +126,41 @@ const Sidebar = ({
   const [copiedServerEntry, setCopiedServerEntry] = useState(false);
   const [copiedServerFile, setCopiedServerFile] = useState(false);
   const { toast } = useToast();
+
+  // Mode change reconnection state
+  const [pendingMode, setPendingMode] = useState<DetectionMode | null>(null);
+  const [reconnecting, setReconnecting] = useState(false);
+
+  const handleModeChange = useCallback(
+    (newMode: DetectionMode) => {
+      if (connectionStatus === "connected" && newMode !== detectionMode) {
+        setPendingMode(newMode);
+      } else {
+        setDetectionMode(newMode);
+      }
+    },
+    [connectionStatus, detectionMode, setDetectionMode],
+  );
+
+  const handleConfirmModeChange = useCallback(() => {
+    if (!pendingMode) return;
+    setDetectionMode(pendingMode);
+    setPendingMode(null);
+    setReconnecting(true);
+    onDisconnect();
+  }, [pendingMode, setDetectionMode, onDisconnect]);
+
+  const handleCancelModeChange = useCallback(() => {
+    setPendingMode(null);
+  }, []);
+
+  // Reconnect after disconnect completes with updated mode headers
+  useEffect(() => {
+    if (reconnecting && connectionStatus === "disconnected") {
+      setReconnecting(false);
+      onConnect();
+    }
+  }, [reconnecting, connectionStatus, onConnect]);
 
   const connectionTypeTip =
     "Connect to server directly (requires CORS config on server) or via MCP Inspector Proxy";
@@ -426,7 +469,7 @@ const Sidebar = ({
               />
               <ModeSelector
                 mode={detectionMode}
-                onChange={setDetectionMode}
+                onChange={handleModeChange}
                 disabled={
                   !skyflowConfig.clusterId ||
                   !skyflowConfig.bearerToken ||
@@ -719,6 +762,32 @@ const Sidebar = ({
           </div>
         </div>
       </div>
+
+      {/* Mode change confirmation dialog */}
+      <Dialog
+        open={pendingMode !== null}
+        onOpenChange={(open) => {
+          if (!open) handleCancelModeChange();
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Change Detection Mode</DialogTitle>
+            <DialogDescription>
+              Changing detection mode from &ldquo;{detectionMode}&rdquo; to
+              &ldquo;{pendingMode}&rdquo; requires reconnecting to the MCP
+              server. The current session will be disconnected and a new
+              connection established with the updated mode.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={handleCancelModeChange}>
+              Cancel
+            </Button>
+            <Button onClick={handleConfirmModeChange}>Reconnect</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };

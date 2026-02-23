@@ -4,7 +4,7 @@
 
 // --- Detection Modes ---
 
-export type DetectionMode = "log" | "warn" | "error";
+export type DetectionMode = "log" | "warn" | "error" | "tokenize";
 
 // --- Skyflow Credentials (relayed per-request via headers) ---
 
@@ -78,6 +78,8 @@ export interface DetectionEvent {
   severity: DetectionSeverity;
   /** The detection mode that was active */
   mode: DetectionMode;
+  /** Whether the message was tokenized (tokenize mode only) */
+  tokenized?: boolean;
 }
 
 // --- Helper to extract credentials from request headers ---
@@ -100,7 +102,12 @@ export function extractDetectionMode(
   headers: Record<string, string | string[] | undefined>,
 ): DetectionMode {
   const mode = getHeaderValue(headers, "x-detection-mode");
-  if (mode === "log" || mode === "warn" || mode === "error") {
+  if (
+    mode === "log" ||
+    mode === "warn" ||
+    mode === "error" ||
+    mode === "tokenize"
+  ) {
     return mode;
   }
   return "log"; // default

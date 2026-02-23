@@ -634,47 +634,54 @@ app.get(
  * SSE endpoint for streaming detection events to the client.
  * Client connects with EventSource to receive real-time PII detection results.
  */
-app.get(
-  "/detect-events/:sessionId",
-  originValidationMiddleware,
-  authMiddleware,
-  (req, res) => {
-    const sessionId = req.params.sessionId as string;
-
-    res.writeHead(200, {
-      "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache",
-      Connection: "keep-alive",
-      "Access-Control-Allow-Origin": "*",
-    });
-
-    // Register this listener
-    if (!detectEventListeners.has(sessionId)) {
-      detectEventListeners.set(sessionId, new Set());
+app.get("/detect-events/:sessionId", originValidationMiddleware, (req, res) => {
+  // EventSource can't set custom headers, so accept auth token via query param
+  if (!authDisabled) {
+    const queryToken = req.query.token as string | undefined;
+    if (!queryToken || queryToken.length !== sessionToken.length) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
     }
-    detectEventListeners.get(sessionId)!.add(res);
+    if (!timingSafeEqual(Buffer.from(queryToken), Buffer.from(sessionToken))) {
+      res.status(401).json({ error: "Unauthorized" });
+      return;
+    }
+  }
+  const sessionId = req.params.sessionId as string;
 
-    // Send initial connection event
-    res.write(`data: ${JSON.stringify({ type: "connected", sessionId })}\n\n`);
+  res.writeHead(200, {
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-cache",
+    Connection: "keep-alive",
+    "Access-Control-Allow-Origin": "*",
+  });
 
-    // Heartbeat to keep connection alive
-    const heartbeat = setInterval(() => {
-      res.write(": heartbeat\n\n");
-    }, 30_000);
+  // Register this listener
+  if (!detectEventListeners.has(sessionId)) {
+    detectEventListeners.set(sessionId, new Set());
+  }
+  detectEventListeners.get(sessionId)!.add(res);
 
-    // Cleanup on disconnect
-    req.on("close", () => {
-      clearInterval(heartbeat);
-      const listeners = detectEventListeners.get(sessionId);
-      if (listeners) {
-        listeners.delete(res);
-        if (listeners.size === 0) {
-          detectEventListeners.delete(sessionId);
-        }
+  // Send initial connection event
+  res.write(`data: ${JSON.stringify({ type: "connected", sessionId })}\n\n`);
+
+  // Heartbeat to keep connection alive
+  const heartbeat = setInterval(() => {
+    res.write(": heartbeat\n\n");
+  }, 30_000);
+
+  // Cleanup on disconnect
+  req.on("close", () => {
+    clearInterval(heartbeat);
+    const listeners = detectEventListeners.get(sessionId);
+    if (listeners) {
+      listeners.delete(res);
+      if (listeners.size === 0) {
+        detectEventListeners.delete(sessionId);
       }
-    });
-  },
-);
+    }
+  });
+});
 
 /**
  * Validates Skyflow credentials without proxying any MCP traffic.
