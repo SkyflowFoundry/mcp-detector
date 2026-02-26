@@ -23,11 +23,6 @@ const SkyflowConfigPanel = ({
 
   return (
     <div className="space-y-3">
-      <div className="flex items-center justify-between">
-        <h4 className="text-sm font-semibold">Skyflow Detect</h4>
-        <StatusIndicator status={validationStatus} />
-      </div>
-
       <div className="space-y-2">
         <label className="text-xs font-medium text-muted-foreground">
           Cluster ID
@@ -122,7 +117,7 @@ const SkyflowConfigPanel = ({
   );
 };
 
-function StatusIndicator({
+export function StatusIndicator({
   status,
 }: {
   status: "unconfigured" | "validating" | "valid" | "invalid";

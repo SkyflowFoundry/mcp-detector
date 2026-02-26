@@ -25,6 +25,7 @@ export interface McpProxyDetectionOptions {
   mode: DetectionMode;
   credentials: SkyflowCredentials;
   emitEvent: DetectionEventEmitter;
+  allowedMethods?: Set<string>;
 }
 
 export default function mcpProxy({

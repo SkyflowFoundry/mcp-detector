@@ -80,6 +80,8 @@ export interface DetectionEvent {
   mode: DetectionMode;
   /** Whether the message was tokenized (tokenize mode only) */
   tokenized?: boolean;
+  /** The MCP method name that was scanned (e.g. "tools/call") */
+  method?: string;
 }
 
 // --- Helper to extract credentials from request headers ---
@@ -111,6 +113,18 @@ export function extractDetectionMode(
     return mode;
   }
   return "log"; // default
+}
+
+export function extractScanMethods(
+  headers: Record<string, string | string[] | undefined>,
+): Set<string> | null {
+  const raw = getHeaderValue(headers, "x-scan-methods");
+  if (!raw) return null; // null = scan all methods in SCAN_METHODS
+  const methods = raw
+    .split(",")
+    .map((m) => m.trim())
+    .filter(Boolean);
+  return methods.length > 0 ? new Set(methods) : null;
 }
 
 function getHeaderValue(

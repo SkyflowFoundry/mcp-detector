@@ -16,8 +16,9 @@ import {
   CheckCheck,
   Server,
 } from "lucide-react";
-import SkyflowConfigPanel from "./SkyflowConfig";
+import SkyflowConfigPanel, { StatusIndicator } from "./SkyflowConfig";
 import ModeSelector from "./ModeSelector";
+import ScanMethodsConfig from "./ScanMethodsConfig";
 import type { SkyflowConfig, DetectionMode } from "@/lib/hooks/useDetection";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -84,6 +85,8 @@ interface SidebarProps {
   setSkyflowConfig: (config: SkyflowConfig) => void;
   detectionMode: DetectionMode;
   setDetectionMode: (mode: DetectionMode) => void;
+  scanMethods: Set<string>;
+  setScanMethods: (methods: Set<string>) => void;
   validationStatus: "unconfigured" | "validating" | "valid" | "invalid";
   validationError: string;
   onValidateCredentials: () => void;
@@ -115,12 +118,15 @@ const Sidebar = ({
   setSkyflowConfig,
   detectionMode,
   setDetectionMode,
+  scanMethods,
+  setScanMethods,
   validationStatus,
   validationError,
   onValidateCredentials,
 }: SidebarProps) => {
   const [theme, setTheme] = useTheme();
   const [showAuthConfig, setShowAuthConfig] = useState(false);
+  const [showSkyflowConfig, setShowSkyflowConfig] = useState(false);
   const [showConfig, setShowConfig] = useState(false);
   const [showClientSecret, setShowClientSecret] = useState(false);
   const [copiedServerEntry, setCopiedServerEntry] = useState(false);
@@ -459,24 +465,52 @@ const Sidebar = ({
           </div>
           {/* Detection Config */}
           <div className="space-y-2">
-            <div className="p-3 rounded border space-y-3">
-              <SkyflowConfigPanel
-                config={skyflowConfig}
-                onChange={setSkyflowConfig}
-                validationStatus={validationStatus}
-                validationError={validationError}
-                onValidate={onValidateCredentials}
-              />
-              <ModeSelector
-                mode={detectionMode}
-                onChange={handleModeChange}
-                disabled={
-                  !skyflowConfig.clusterId ||
-                  !skyflowConfig.bearerToken ||
-                  !skyflowConfig.vaultId
-                }
-              />
-            </div>
+            <Button
+              variant="outline"
+              onClick={() => setShowSkyflowConfig(!showSkyflowConfig)}
+              className="flex items-center w-full"
+              data-testid="skyflow-config-button"
+              aria-expanded={showSkyflowConfig}
+            >
+              {showSkyflowConfig ? (
+                <ChevronDown className="w-4 h-4 mr-2" />
+              ) : (
+                <ChevronRight className="w-4 h-4 mr-2" />
+              )}
+              Skyflow Configuration
+              <span className="ml-auto">
+                <StatusIndicator status={validationStatus} />
+              </span>
+            </Button>
+            {showSkyflowConfig && (
+              <div className="p-3 rounded border space-y-3">
+                <SkyflowConfigPanel
+                  config={skyflowConfig}
+                  onChange={setSkyflowConfig}
+                  validationStatus={validationStatus}
+                  validationError={validationError}
+                  onValidate={onValidateCredentials}
+                />
+                <ModeSelector
+                  mode={detectionMode}
+                  onChange={handleModeChange}
+                  disabled={
+                    !skyflowConfig.clusterId ||
+                    !skyflowConfig.bearerToken ||
+                    !skyflowConfig.vaultId
+                  }
+                />
+                <ScanMethodsConfig
+                  methods={scanMethods}
+                  onChange={setScanMethods}
+                  disabled={
+                    !skyflowConfig.clusterId ||
+                    !skyflowConfig.bearerToken ||
+                    !skyflowConfig.vaultId
+                  }
+                />
+              </div>
+            )}
           </div>
 
           {/* Configuration */}
@@ -494,7 +528,7 @@ const Sidebar = ({
                 <ChevronRight className="w-4 h-4 mr-2" />
               )}
               <Settings className="w-4 h-4 mr-2" />
-              Configuration
+              Client Configuration
             </Button>
             {showConfig && (
               <div className="space-y-2">

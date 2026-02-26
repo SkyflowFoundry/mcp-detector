@@ -47,7 +47,28 @@ export interface DetectionEvent {
   severity: "info" | "warn" | "error";
   mode: DetectionMode;
   tokenized?: boolean;
+  method?: string;
 }
+
+export const SCAN_METHODS_LIST = [
+  "tools/call",
+  "sampling/createMessage",
+  "prompts/get",
+  "resources/read",
+  "completion/complete",
+  "elicitation/create",
+  "notifications/message",
+] as const;
+
+export const SCAN_METHOD_LABELS: Record<string, string> = {
+  "tools/call": "Tool Call",
+  "sampling/createMessage": "Sampling",
+  "prompts/get": "Prompt",
+  "resources/read": "Resource Read",
+  "completion/complete": "Completion",
+  "elicitation/create": "Elicitation",
+  "notifications/message": "Notification",
+};
 
 export interface AggregateStats {
   totalScanned: number;
@@ -73,6 +94,7 @@ const EMPTY_STATS: AggregateStats = {
 };
 
 const SKYFLOW_SESSION_KEY = "skyflowConfig";
+const SCAN_METHODS_SESSION_KEY = "scanMethods";
 
 function loadSkyflowConfig(): SkyflowConfig {
   try {
@@ -88,8 +110,27 @@ function saveSkyflowConfig(config: SkyflowConfig): void {
   sessionStorage.setItem(SKYFLOW_SESSION_KEY, JSON.stringify(config));
 }
 
+function loadScanMethods(): Set<string> {
+  try {
+    const saved = sessionStorage.getItem(SCAN_METHODS_SESSION_KEY);
+    if (saved) return new Set(JSON.parse(saved));
+  } catch {
+    // ignore parse errors
+  }
+  return new Set(SCAN_METHODS_LIST);
+}
+
+function saveScanMethods(methods: Set<string>): void {
+  sessionStorage.setItem(
+    SCAN_METHODS_SESSION_KEY,
+    JSON.stringify([...methods]),
+  );
+}
+
 export function useDetection(inspectorConfig: InspectorConfig) {
   const [detectionMode, setDetectionMode] = useState<DetectionMode>("log");
+  const [scanMethods, setScanMethodsState] =
+    useState<Set<string>>(loadScanMethods);
   const [skyflowConfig, setSkyflowConfigState] =
     useState<SkyflowConfig>(loadSkyflowConfig);
   const [validationStatus, setValidationStatus] = useState<
@@ -101,6 +142,11 @@ export function useDetection(inspectorConfig: InspectorConfig) {
     useState<AggregateStats>(EMPTY_STATS);
 
   const eventSourceRef = useRef<EventSource | null>(null);
+
+  const setScanMethods = useCallback((methods: Set<string>) => {
+    setScanMethodsState(methods);
+    saveScanMethods(methods);
+  }, []);
 
   const setSkyflowConfig = useCallback((config: SkyflowConfig) => {
     setSkyflowConfigState(config);
@@ -276,13 +322,20 @@ export function useDetection(inspectorConfig: InspectorConfig) {
   const getDetectionHeaders = useCallback((): Record<string, string> => {
     if (!isConfigured) return {};
 
-    return {
+    const headers: Record<string, string> = {
       "X-Skyflow-Cluster-Id": skyflowConfig.clusterId,
       "X-Skyflow-Bearer-Token": skyflowConfig.bearerToken,
       "X-Skyflow-Vault-Id": skyflowConfig.vaultId,
       "X-Detection-Mode": detectionMode,
     };
-  }, [isConfigured, skyflowConfig, detectionMode]);
+
+    // Only send header when not all methods are selected (backward compat)
+    if (scanMethods.size < SCAN_METHODS_LIST.length && scanMethods.size > 0) {
+      headers["X-Scan-Methods"] = [...scanMethods].join(",");
+    }
+
+    return headers;
+  }, [isConfigured, skyflowConfig, detectionMode, scanMethods]);
 
   return {
     // Skyflow config
@@ -298,6 +351,10 @@ export function useDetection(inspectorConfig: InspectorConfig) {
     // Detection mode
     detectionMode,
     setDetectionMode,
+
+    // Scan methods
+    scanMethods,
+    setScanMethods,
 
     // Events
     detectionEvents,

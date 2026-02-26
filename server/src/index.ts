@@ -18,7 +18,11 @@ import { randomUUID, randomBytes, timingSafeEqual } from "node:crypto";
 import { fileURLToPath } from "url";
 import { dirname, join } from "path";
 import { readFileSync } from "fs";
-import { extractSkyflowCredentials, extractDetectionMode } from "./types.js";
+import {
+  extractSkyflowCredentials,
+  extractDetectionMode,
+  extractScanMethods,
+} from "./types.js";
 import type { DetectionEvent } from "./types.js";
 import { validateCredentials } from "./skyflowClient.js";
 
@@ -62,7 +66,8 @@ const getHttpHeaders = (req: express.Request): Record<string, string> => {
         lowerKey !== "x-mcp-proxy-auth" &&
         lowerKey !== "mcp-session-id" &&
         !lowerKey.startsWith("x-skyflow-") &&
-        lowerKey !== "x-detection-mode"
+        lowerKey !== "x-detection-mode" &&
+        lowerKey !== "x-scan-methods"
       ) {
         const value = req.headers[key];
 
@@ -459,6 +464,9 @@ app.post(
         const detectionMode = extractDetectionMode(
           req.headers as Record<string, string | string[] | undefined>,
         );
+        const scanMethods = extractScanMethods(
+          req.headers as Record<string, string | string[] | undefined>,
+        );
 
         // Mutable ref so detection events can reference the session ID
         // after it's assigned during onsessioninitialized
@@ -518,6 +526,7 @@ app.post(
                   }
                 }
               },
+              ...(scanMethods ? { allowedMethods: scanMethods } : {}),
             }
           : undefined;
 

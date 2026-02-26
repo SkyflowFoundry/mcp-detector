@@ -1,9 +1,10 @@
 import { useState } from "react";
 import { TabsContent } from "@/components/ui/tabs";
-import type {
-  DetectionEvent,
-  AggregateStats,
-  SkyflowEntity,
+import {
+  SCAN_METHOD_LABELS,
+  type DetectionEvent,
+  type AggregateStats,
+  type SkyflowEntity,
 } from "@/lib/hooks/useDetection";
 import { cn } from "@/lib/utils";
 import {
@@ -222,6 +223,11 @@ function EventRow({ event }: { event: DetectionEvent }) {
         >
           {directionLabel}
         </span>
+        {event.method && (
+          <span className="px-1.5 py-0.5 rounded text-[11px] font-medium bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300">
+            {SCAN_METHOD_LABELS[event.method] ?? event.method}
+          </span>
+        )}
         {event.blocked && (
           <span className="text-red-600 dark:text-red-400 font-semibold">
             BLOCKED

@@ -221,11 +221,33 @@ Client ──msg──▶ Proxy ──hold──▶ Skyflow Detect API
 
 ---
 
-## How text is extracted from messages
+## Opt-in method-aware detection
 
-The `extractTextFromMessage()` function in `server/src/detectEngine.ts` recursively walks the entire JSON-RPC message object and collects all string values. These strings are concatenated with newline separators and sent as a single text blob to the Skyflow Detect API.
+Detection uses an **opt-in** approach: only MCP methods whose payloads are likely to contain user PII are scanned. All other messages (protocol handshakes, capability negotiations, tool/resource listings, etc.) are forwarded immediately without any Skyflow API calls.
 
-This means **all** string content in the message is scanned — including method names, parameter keys, tool names, resource URIs, etc. — not just user-facing content.
+The `SCAN_METHODS` map in `server/src/detectEngine.ts` defines which methods are scanned and which specific sub-fields within `params`/`result` are extracted:
+
+| Method                   | Scanned `params` fields    | Scanned `result` fields        |
+| ------------------------ | -------------------------- | ------------------------------ |
+| `tools/call`             | `arguments`                | `content`, `structuredContent` |
+| `sampling/createMessage` | `messages`, `systemPrompt` | `content`, `structuredContent` |
+| `prompts/get`            | `arguments`                | `messages`                     |
+| `resources/read`         | —                          | `contents`                     |
+| `completion/complete`    | `argument`                 | `completion`                   |
+| `elicitation/create`     | `message`                  | `content`                      |
+| `notifications/message`  | `data`                     | —                              |
+
+Messages not in this map — including `initialize`, `ping`, `tools/list`, `resources/list`, `prompts/list`, and all other protocol/metadata methods — are **never scanned** and pass through with zero overhead in all modes.
+
+### How text is extracted
+
+The `extractTextForMethod()` function looks up the message's MCP method in `SCAN_METHODS`. If found, it walks only the listed sub-fields and recursively collects all string values, which are concatenated with newline separators and sent as a single text blob to the Skyflow Detect API.
+
+For responses (which lack a `method` field), the proxy tracks a `pendingRequestMethods` map that correlates each request ID to its method name, so the correct scan config is applied to the response.
+
+### Tokenization scoping
+
+When Tokenize mode replaces PII values with Skyflow tokens, the replacement is scoped to **only the sub-fields listed in `SCAN_METHODS`** for the given method. For example, a `tools/call` request will only have `params.arguments` tokenized — `params.name` (the tool name) is never touched. This prevents false positives on tool names, resource URIs, prompt names, and other metadata from corrupting messages.
 
 ---
 

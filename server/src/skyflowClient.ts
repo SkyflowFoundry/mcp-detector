@@ -26,7 +26,7 @@ export class SkyflowClientError extends Error {
  * Constructs the Skyflow Detect API base URL from a cluster ID.
  */
 function getBaseUrl(clusterId: string): string {
-  return `https://${clusterId}.vault.skyflowapis.com`;
+  return `https://${clusterId}.vault.skyflowapis.com`; // TODO allow the user to directly specify the 'vault_url' instead of just the cluster ID
 }
 
 /**
@@ -44,6 +44,7 @@ export async function deidentifyText(
     text,
     vault_id: credentials.vaultId,
     token_type: {
+      // TODO make this configurable by the user
       default: "entity_unq_counter",
     },
   });
