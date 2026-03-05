@@ -127,6 +127,26 @@ export function extractScanMethods(
   return methods.length > 0 ? new Set(methods) : null;
 }
 
+export function extractEntityTypes(
+  headers: Record<string, string | string[] | undefined>,
+): string[] | null {
+  const raw = getHeaderValue(headers, "x-entity-types");
+  if (!raw) return null; // null = detect all entity types (API default)
+  const types = raw
+    .split(",")
+    .map((t) => t.trim())
+    .filter(Boolean);
+  return types.length > 0 ? types : null;
+}
+
+export function extractTokenType(
+  headers: Record<string, string | string[] | undefined>,
+): string {
+  const raw = getHeaderValue(headers, "x-token-type");
+  if (raw === "vault_token") return "vault_token";
+  return "entity_unq_counter"; // default
+}
+
 function getHeaderValue(
   headers: Record<string, string | string[] | undefined>,
   key: string,

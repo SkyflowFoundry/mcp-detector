@@ -176,6 +176,8 @@ const App = () => {
     getDetectionHeaders,
     scanMethods,
     setScanMethods,
+    entityTypes,
+    setEntityTypes,
   } = useDetection(config);
 
   const [bearerToken, setBearerToken] = useState<string>(() => {
@@ -1302,6 +1304,8 @@ const App = () => {
           onValidateCredentials={validateCredentials}
           scanMethods={scanMethods}
           setScanMethods={setScanMethods}
+          entityTypes={entityTypes}
+          setEntityTypes={setEntityTypes}
         />
         <div
           onMouseDown={handleSidebarDragStart}

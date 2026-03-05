@@ -29,6 +29,8 @@ interface DetectionOptions {
   credentials: SkyflowCredentials;
   emitEvent: DetectionEventEmitter;
   allowedMethods?: Set<string>;
+  entityTypes?: string[];
+  tokenType?: string;
 }
 
 /**
@@ -127,6 +129,8 @@ function extractTextForMethod(
 async function detectPii(
   text: string,
   credentials: SkyflowCredentials,
+  entityTypes?: string[],
+  tokenType?: string,
 ): Promise<DetectionResult> {
   if (!text.trim()) {
     return {
@@ -138,7 +142,13 @@ async function detectPii(
     };
   }
 
-  const response = await deidentifyText(text, credentials);
+  const response = await deidentifyText(
+    text,
+    credentials,
+    undefined,
+    entityTypes,
+    tokenType,
+  );
   return {
     entities: response.entities,
     originalText: text,
@@ -244,7 +254,15 @@ export function wrapWithDetection(
   wrappedClientHandler: (message: JSONRPCMessage) => void;
   wrappedServerHandler: (message: JSONRPCMessage) => void;
 } {
-  const { sessionId, mode, credentials, emitEvent, allowedMethods } = options;
+  const {
+    sessionId,
+    mode,
+    credentials,
+    emitEvent,
+    allowedMethods,
+    entityTypes,
+    tokenType,
+  } = options;
 
   // Track request IDs → method names so we can look up the method for responses.
   // Responses don't have a `method` field, so we correlate by request ID.
@@ -282,6 +300,8 @@ export function wrapWithDetection(
         credentials,
         emitEvent,
         method,
+        entityTypes,
+        tokenType,
       );
     } else if (mode === "tokenize") {
       handleTokenizeMode(
@@ -294,6 +314,8 @@ export function wrapWithDetection(
         credentials,
         emitEvent,
         method,
+        entityTypes,
+        tokenType,
       );
     } else {
       // Log/Warn mode: forward immediately, detect async
@@ -309,6 +331,8 @@ export function wrapWithDetection(
         credentials,
         emitEvent,
         method,
+        entityTypes,
+        tokenType,
       );
     }
   };
@@ -346,6 +370,8 @@ export function wrapWithDetection(
         credentials,
         emitEvent,
         method,
+        entityTypes,
+        tokenType,
       );
     } else if (mode === "tokenize") {
       handleTokenizeMode(
@@ -358,6 +384,8 @@ export function wrapWithDetection(
         credentials,
         emitEvent,
         method,
+        entityTypes,
+        tokenType,
       );
     } else {
       // Log/Warn mode: forward immediately, detect async
@@ -373,6 +401,8 @@ export function wrapWithDetection(
         credentials,
         emitEvent,
         method,
+        entityTypes,
+        tokenType,
       );
     }
   };
@@ -391,8 +421,10 @@ function detectAndEmit(
   credentials: SkyflowCredentials,
   emitEvent: DetectionEventEmitter,
   method?: string | null,
+  entityTypes?: string[],
+  tokenType?: string,
 ): void {
-  detectPii(text, credentials)
+  detectPii(text, credentials, entityTypes, tokenType)
     .then((result) => {
       // Emit for all scanned messages so the Detect tab can track
       // total scanned, clean, and detected counts
@@ -497,6 +529,8 @@ function handleTokenizeMode(
   credentials: SkyflowCredentials,
   emitEvent: DetectionEventEmitter,
   method: string | null,
+  entityTypes?: string[],
+  tokenType?: string,
 ): void {
   if (!text.trim()) {
     // No text to scan, forward immediately
@@ -508,7 +542,7 @@ function handleTokenizeMode(
 
   const messageId = (message as any).id;
 
-  detectPii(text, credentials)
+  detectPii(text, credentials, entityTypes, tokenType)
     .then((result) => {
       if (result.hasPii) {
         // Tokenize and forward
@@ -602,6 +636,8 @@ function handleErrorMode(
   credentials: SkyflowCredentials,
   emitEvent: DetectionEventEmitter,
   method: string | null,
+  entityTypes?: string[],
+  tokenType?: string,
 ): void {
   if (!text.trim()) {
     // No text to scan, forward immediately
@@ -613,7 +649,7 @@ function handleErrorMode(
 
   const messageId = (message as any).id;
 
-  detectPii(text, credentials)
+  detectPii(text, credentials, entityTypes, tokenType)
     .then((result) => {
       if (result.hasPii) {
         // Block the message

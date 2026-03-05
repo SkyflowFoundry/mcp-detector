@@ -10,6 +10,7 @@ export interface SkyflowConfig {
   clusterId: string;
   bearerToken: string;
   vaultId: string;
+  tokenType?: "entity_unq_counter" | "vault_token";
 }
 
 export interface SkyflowEntityLocation {
@@ -70,6 +71,234 @@ export const SCAN_METHOD_LABELS: Record<string, string> = {
   "notifications/message": "Notification",
 };
 
+export const ENTITY_TYPES_LIST = [
+  "age",
+  "bank_account",
+  "credit_card",
+  "credit_card_expiration",
+  "cvv",
+  "date",
+  "date_interval",
+  "dob",
+  "driver_license",
+  "email_address",
+  "healthcare_number",
+  "ip_address",
+  "location",
+  "name",
+  "numerical_pii",
+  "phone_number",
+  "ssn",
+  "url",
+  "vehicle_id",
+  "medical_code",
+  "name_family",
+  "name_given",
+  "account_number",
+  "event",
+  "filename",
+  "gender",
+  "language",
+  "location_address",
+  "location_city",
+  "location_coordinate",
+  "location_country",
+  "location_state",
+  "location_zip",
+  "marital_status",
+  "money",
+  "name_medical_professional",
+  "occupation",
+  "organization",
+  "organization_medical_facility",
+  "origin",
+  "passport_number",
+  "password",
+  "physical_attribute",
+  "political_affiliation",
+  "religion",
+  "time",
+  "username",
+  "zodiac_sign",
+  "blood_type",
+  "condition",
+  "dose",
+  "drug",
+  "injury",
+  "medical_process",
+  "statistics",
+  "routing_number",
+  "corporate_action",
+  "financial_metric",
+  "product",
+  "trend",
+  "duration",
+  "location_address_street",
+  "sexuality",
+  "effect",
+  "project",
+  "organization_id",
+  "day",
+  "month",
+  "year",
+] as const;
+
+export const ENTITY_TYPE_LABELS: Record<string, string> = {
+  age: "Age",
+  bank_account: "Bank Account",
+  credit_card: "Credit Card",
+  credit_card_expiration: "CC Expiration",
+  cvv: "CVV",
+  date: "Date",
+  date_interval: "Date Interval",
+  dob: "Date of Birth",
+  driver_license: "Driver License",
+  email_address: "Email Address",
+  healthcare_number: "Healthcare Number",
+  ip_address: "IP Address",
+  location: "Location",
+  name: "Name",
+  numerical_pii: "Numerical PII",
+  phone_number: "Phone Number",
+  ssn: "SSN",
+  url: "URL",
+  vehicle_id: "Vehicle ID",
+  medical_code: "Medical Code",
+  name_family: "Family Name",
+  name_given: "Given Name",
+  account_number: "Account Number",
+  event: "Event",
+  filename: "Filename",
+  gender: "Gender",
+  language: "Language",
+  location_address: "Address",
+  location_city: "City",
+  location_coordinate: "Coordinates",
+  location_country: "Country",
+  location_state: "State",
+  location_zip: "Zip Code",
+  marital_status: "Marital Status",
+  money: "Money",
+  name_medical_professional: "Medical Professional",
+  occupation: "Occupation",
+  organization: "Organization",
+  organization_medical_facility: "Medical Facility",
+  origin: "Origin",
+  passport_number: "Passport Number",
+  password: "Password",
+  physical_attribute: "Physical Attribute",
+  political_affiliation: "Political Affiliation",
+  religion: "Religion",
+  time: "Time",
+  username: "Username",
+  zodiac_sign: "Zodiac Sign",
+  blood_type: "Blood Type",
+  condition: "Condition",
+  dose: "Dose",
+  drug: "Drug",
+  injury: "Injury",
+  medical_process: "Medical Process",
+  statistics: "Statistics",
+  routing_number: "Routing Number",
+  corporate_action: "Corporate Action",
+  financial_metric: "Financial Metric",
+  product: "Product",
+  trend: "Trend",
+  duration: "Duration",
+  location_address_street: "Street Address",
+  sexuality: "Sexuality",
+  effect: "Effect",
+  project: "Project",
+  organization_id: "Organization ID",
+  day: "Day",
+  month: "Month",
+  year: "Year",
+};
+
+export const ENTITY_TYPE_CATEGORIES: Record<string, string[]> = {
+  PII: [
+    "name",
+    "name_family",
+    "name_given",
+    "dob",
+    "age",
+    "gender",
+    "sexuality",
+    "email_address",
+    "phone_number",
+    "ssn",
+    "driver_license",
+    "passport_number",
+    "ip_address",
+    "url",
+    "username",
+    "password",
+    "marital_status",
+    "political_affiliation",
+    "religion",
+    "zodiac_sign",
+    "physical_attribute",
+    "occupation",
+    "origin",
+    "language",
+  ],
+  Location: [
+    "location",
+    "location_address",
+    "location_address_street",
+    "location_city",
+    "location_state",
+    "location_country",
+    "location_zip",
+    "location_coordinate",
+  ],
+  Financial: [
+    "bank_account",
+    "credit_card",
+    "credit_card_expiration",
+    "cvv",
+    "account_number",
+    "routing_number",
+    "money",
+    "corporate_action",
+    "financial_metric",
+  ],
+  Healthcare: [
+    "healthcare_number",
+    "medical_code",
+    "name_medical_professional",
+    "organization_medical_facility",
+    "blood_type",
+    "condition",
+    "dose",
+    "drug",
+    "injury",
+    "medical_process",
+    "effect",
+    "statistics",
+  ],
+  Temporal: [
+    "date",
+    "date_interval",
+    "time",
+    "day",
+    "month",
+    "year",
+    "duration",
+  ],
+  Other: [
+    "numerical_pii",
+    "vehicle_id",
+    "event",
+    "filename",
+    "organization",
+    "organization_id",
+    "product",
+    "project",
+    "trend",
+  ],
+};
+
 export interface AggregateStats {
   totalScanned: number;
   totalDetected: number;
@@ -95,15 +324,25 @@ const EMPTY_STATS: AggregateStats = {
 
 const SKYFLOW_SESSION_KEY = "skyflowConfig";
 const SCAN_METHODS_SESSION_KEY = "scanMethods";
+const ENTITY_TYPES_SESSION_KEY = "entityTypes";
 
 function loadSkyflowConfig(): SkyflowConfig {
   try {
     const saved = sessionStorage.getItem(SKYFLOW_SESSION_KEY);
-    if (saved) return JSON.parse(saved);
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      if (!parsed.tokenType) parsed.tokenType = "entity_unq_counter";
+      return parsed;
+    }
   } catch {
     // ignore parse errors
   }
-  return { clusterId: "", bearerToken: "", vaultId: "" };
+  return {
+    clusterId: "",
+    bearerToken: "",
+    vaultId: "",
+    tokenType: "entity_unq_counter",
+  };
 }
 
 function saveSkyflowConfig(config: SkyflowConfig): void {
@@ -127,10 +366,26 @@ function saveScanMethods(methods: Set<string>): void {
   );
 }
 
+function loadEntityTypes(): Set<string> {
+  try {
+    const saved = sessionStorage.getItem(ENTITY_TYPES_SESSION_KEY);
+    if (saved) return new Set(JSON.parse(saved));
+  } catch {
+    // ignore parse errors
+  }
+  return new Set(ENTITY_TYPES_LIST);
+}
+
+function saveEntityTypes(types: Set<string>): void {
+  sessionStorage.setItem(ENTITY_TYPES_SESSION_KEY, JSON.stringify([...types]));
+}
+
 export function useDetection(inspectorConfig: InspectorConfig) {
   const [detectionMode, setDetectionMode] = useState<DetectionMode>("log");
   const [scanMethods, setScanMethodsState] =
     useState<Set<string>>(loadScanMethods);
+  const [entityTypes, setEntityTypesState] =
+    useState<Set<string>>(loadEntityTypes);
   const [skyflowConfig, setSkyflowConfigState] =
     useState<SkyflowConfig>(loadSkyflowConfig);
   const [validationStatus, setValidationStatus] = useState<
@@ -146,6 +401,11 @@ export function useDetection(inspectorConfig: InspectorConfig) {
   const setScanMethods = useCallback((methods: Set<string>) => {
     setScanMethodsState(methods);
     saveScanMethods(methods);
+  }, []);
+
+  const setEntityTypes = useCallback((types: Set<string>) => {
+    setEntityTypesState(types);
+    saveEntityTypes(types);
   }, []);
 
   const setSkyflowConfig = useCallback((config: SkyflowConfig) => {
@@ -334,8 +594,21 @@ export function useDetection(inspectorConfig: InspectorConfig) {
       headers["X-Scan-Methods"] = [...scanMethods].join(",");
     }
 
+    // Only send header when not all entity types are selected (backward compat)
+    if (entityTypes.size < ENTITY_TYPES_LIST.length && entityTypes.size > 0) {
+      headers["X-Entity-Types"] = [...entityTypes].join(",");
+    }
+
+    // Only send when not the default (backward compat)
+    if (
+      skyflowConfig.tokenType &&
+      skyflowConfig.tokenType !== "entity_unq_counter"
+    ) {
+      headers["X-Token-Type"] = skyflowConfig.tokenType;
+    }
+
     return headers;
-  }, [isConfigured, skyflowConfig, detectionMode, scanMethods]);
+  }, [isConfigured, skyflowConfig, detectionMode, scanMethods, entityTypes]);
 
   return {
     // Skyflow config
@@ -355,6 +628,10 @@ export function useDetection(inspectorConfig: InspectorConfig) {
     // Scan methods
     scanMethods,
     setScanMethods,
+
+    // Entity types
+    entityTypes,
+    setEntityTypes,
 
     // Events
     detectionEvents,

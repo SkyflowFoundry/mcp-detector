@@ -19,6 +19,7 @@ import {
 import SkyflowConfigPanel, { StatusIndicator } from "./SkyflowConfig";
 import ModeSelector from "./ModeSelector";
 import ScanMethodsConfig from "./ScanMethodsConfig";
+import EntityTypesConfig from "./EntityTypesConfig";
 import type { SkyflowConfig, DetectionMode } from "@/lib/hooks/useDetection";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -87,6 +88,8 @@ interface SidebarProps {
   setDetectionMode: (mode: DetectionMode) => void;
   scanMethods: Set<string>;
   setScanMethods: (methods: Set<string>) => void;
+  entityTypes: Set<string>;
+  setEntityTypes: (types: Set<string>) => void;
   validationStatus: "unconfigured" | "validating" | "valid" | "invalid";
   validationError: string;
   onValidateCredentials: () => void;
@@ -120,6 +123,8 @@ const Sidebar = ({
   setDetectionMode,
   scanMethods,
   setScanMethods,
+  entityTypes,
+  setEntityTypes,
   validationStatus,
   validationError,
   onValidateCredentials,
@@ -503,6 +508,15 @@ const Sidebar = ({
                 <ScanMethodsConfig
                   methods={scanMethods}
                   onChange={setScanMethods}
+                  disabled={
+                    !skyflowConfig.clusterId ||
+                    !skyflowConfig.bearerToken ||
+                    !skyflowConfig.vaultId
+                  }
+                />
+                <EntityTypesConfig
+                  entityTypes={entityTypes}
+                  onChange={setEntityTypes}
                   disabled={
                     !skyflowConfig.clusterId ||
                     !skyflowConfig.bearerToken ||

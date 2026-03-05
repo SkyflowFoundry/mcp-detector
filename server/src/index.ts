@@ -22,6 +22,8 @@ import {
   extractSkyflowCredentials,
   extractDetectionMode,
   extractScanMethods,
+  extractEntityTypes,
+  extractTokenType,
 } from "./types.js";
 import type { DetectionEvent } from "./types.js";
 import { validateCredentials } from "./skyflowClient.js";
@@ -67,7 +69,9 @@ const getHttpHeaders = (req: express.Request): Record<string, string> => {
         lowerKey !== "mcp-session-id" &&
         !lowerKey.startsWith("x-skyflow-") &&
         lowerKey !== "x-detection-mode" &&
-        lowerKey !== "x-scan-methods"
+        lowerKey !== "x-scan-methods" &&
+        lowerKey !== "x-entity-types" &&
+        lowerKey !== "x-token-type"
       ) {
         const value = req.headers[key];
 
@@ -467,6 +471,12 @@ app.post(
         const scanMethods = extractScanMethods(
           req.headers as Record<string, string | string[] | undefined>,
         );
+        const entityTypes = extractEntityTypes(
+          req.headers as Record<string, string | string[] | undefined>,
+        );
+        const tokenType = extractTokenType(
+          req.headers as Record<string, string | string[] | undefined>,
+        );
 
         // Mutable ref so detection events can reference the session ID
         // after it's assigned during onsessioninitialized
@@ -527,6 +537,8 @@ app.post(
                 }
               },
               ...(scanMethods ? { allowedMethods: scanMethods } : {}),
+              ...(entityTypes ? { entityTypes } : {}),
+              tokenType,
             }
           : undefined;
 

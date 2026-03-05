@@ -1,6 +1,13 @@
 import { useState } from "react";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { Eye, EyeOff, CheckCircle, XCircle, Loader2 } from "lucide-react";
 import type { SkyflowConfig as SkyflowConfigType } from "@/lib/hooks/useDetection";
 
@@ -78,6 +85,34 @@ const SkyflowConfigPanel = ({
             )}
           </Button>
         </div>
+      </div>
+
+      <div className="space-y-2">
+        <label className="text-xs font-medium text-muted-foreground">
+          Token Type
+        </label>
+        <Select
+          value={config.tokenType || "entity_unq_counter"}
+          onValueChange={(value: string) =>
+            onChange({
+              ...config,
+              tokenType: value as "entity_unq_counter" | "vault_token",
+            })
+          }
+        >
+          <SelectTrigger className="font-mono text-xs">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="entity_unq_counter">
+              entity_unq_counter
+            </SelectItem>
+            <SelectItem value="vault_token">vault_token</SelectItem>
+          </SelectContent>
+        </Select>
+        <p className="text-[10px] text-muted-foreground">
+          How detected entities are tokenized in the API response.
+        </p>
       </div>
 
       <Button

@@ -7,7 +7,7 @@ import nodeFetch from "node-fetch";
 import type { SkyflowCredentials, SkyflowDeidentifyResponse } from "./types.js";
 
 const DETECT_API_PATH = "/v1/detect/deidentify/string";
-const DEFAULT_TIMEOUT_MS = 10_000;
+const DEFAULT_TIMEOUT_MS = 30_000;
 const MAX_RETRIES = 2;
 const INITIAL_BACKOFF_MS = 200;
 
@@ -16,6 +16,7 @@ export class SkyflowClientError extends Error {
     message: string,
     public readonly statusCode?: number,
     public readonly retryable: boolean = false,
+    public readonly requestId?: string,
   ) {
     super(message);
     this.name = "SkyflowClientError";
@@ -26,7 +27,11 @@ export class SkyflowClientError extends Error {
  * Constructs the Skyflow Detect API base URL from a cluster ID.
  */
 function getBaseUrl(clusterId: string): string {
-  return `https://${clusterId}.vault.skyflowapis.com`; // TODO allow the user to directly specify the 'vault_url' instead of just the cluster ID
+  const input = clusterId.trim();
+  if (input.startsWith("http://") || input.startsWith("https://")) {
+    return input.replace(/\/+$/, "");
+  }
+  return `https://${input}.vault.skyflowapis.dev`;
 }
 
 /**
@@ -37,15 +42,17 @@ export async function deidentifyText(
   text: string,
   credentials: SkyflowCredentials,
   timeoutMs: number = DEFAULT_TIMEOUT_MS,
+  entityTypes?: string[],
+  tokenType?: string,
 ): Promise<SkyflowDeidentifyResponse> {
   const url = `${getBaseUrl(credentials.clusterId)}${DETECT_API_PATH}`;
 
   const body = JSON.stringify({
     text,
     vault_id: credentials.vaultId,
+    ...(entityTypes?.length ? { entity_types: entityTypes } : {}),
     token_type: {
-      // TODO make this configurable by the user
-      default: "entity_unq_counter",
+      default: tokenType || "entity_unq_counter",
     },
   });
 
@@ -73,7 +80,12 @@ export async function deidentifyText(
 
       clearTimeout(timeout);
 
+      const requestId = response.headers.get("x-request-id") ?? undefined;
+
       if (response.ok) {
+        console.log(
+          `[Skyflow] Detect API success (attempt ${attempt + 1}, x-request-id: ${requestId ?? "n/a"})`,
+        );
         const data =
           (await response.json()) as unknown as SkyflowDeidentifyResponse;
         return data;
@@ -82,18 +94,26 @@ export async function deidentifyText(
       // Non-retryable client errors
       if (response.status >= 400 && response.status < 500) {
         const errorBody = await response.text().catch(() => "Unknown error");
+        console.error(
+          `[Skyflow] Detect API client error ${response.status} (x-request-id: ${requestId ?? "n/a"}): ${errorBody}`,
+        );
         throw new SkyflowClientError(
           `Skyflow API error (${response.status}): ${errorBody}`,
           response.status,
           false,
+          requestId,
         );
       }
 
       // Retryable server errors (5xx)
+      console.error(
+        `[Skyflow] Detect API server error ${response.status} (attempt ${attempt + 1}/${MAX_RETRIES + 1}, x-request-id: ${requestId ?? "n/a"})`,
+      );
       lastError = new SkyflowClientError(
         `Skyflow API server error (${response.status})`,
         response.status,
         true,
+        requestId,
       );
     } catch (error) {
       if (error instanceof SkyflowClientError && !error.retryable) {
@@ -102,12 +122,18 @@ export async function deidentifyText(
 
       // AbortError = timeout
       if (error instanceof Error && error.name === "AbortError") {
+        console.error(
+          `[Skyflow] Detect API timeout after ${timeoutMs}ms (attempt ${attempt + 1}/${MAX_RETRIES + 1})`,
+        );
         lastError = new SkyflowClientError(
           `Skyflow API timeout after ${timeoutMs}ms`,
           undefined,
           true,
         );
       } else if (!(error instanceof SkyflowClientError)) {
+        console.error(
+          `[Skyflow] Detect API network error (attempt ${attempt + 1}/${MAX_RETRIES + 1}): ${error instanceof Error ? error.message : String(error)}`,
+        );
         lastError = new SkyflowClientError(
           `Skyflow API network error: ${error instanceof Error ? error.message : String(error)}`,
           undefined,
