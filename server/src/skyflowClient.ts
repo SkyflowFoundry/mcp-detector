@@ -68,6 +68,18 @@ export async function deidentifyText(
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
+      const redactedToken =
+        credentials.bearerToken.length > 8
+          ? `${credentials.bearerToken.slice(0, 4)}...${credentials.bearerToken.slice(-4)}`
+          : "***";
+
+      console.debug(
+        `[Skyflow] ──── Request (attempt ${attempt + 1}/${MAX_RETRIES + 1}) ────`,
+      );
+      console.debug(`[Skyflow]   URL: POST ${url}`);
+      console.debug(`[Skyflow]   Authorization: Bearer ${redactedToken}`);
+      console.debug(`[Skyflow]   Body: ${body}`);
+
       const response = await nodeFetch(url, {
         method: "POST",
         headers: {
@@ -81,19 +93,35 @@ export async function deidentifyText(
       clearTimeout(timeout);
 
       const requestId = response.headers.get("x-request-id") ?? undefined;
+      const responseHeaders: Record<string, string> = {};
+      response.headers.forEach((value, name) => {
+        responseHeaders[name] = value;
+      });
+
+      console.debug(
+        `[Skyflow] ──── Response (attempt ${attempt + 1}/${MAX_RETRIES + 1}) ────`,
+      );
+      console.debug(
+        `[Skyflow]   Status: ${response.status} ${response.statusText}`,
+      );
+      console.debug(`[Skyflow]   Headers: ${JSON.stringify(responseHeaders)}`);
 
       if (response.ok) {
+        const data =
+          (await response.json()) as unknown as SkyflowDeidentifyResponse;
+        console.debug(`[Skyflow]   Body: ${JSON.stringify(data)}`);
         console.log(
           `[Skyflow] Detect API success (attempt ${attempt + 1}, x-request-id: ${requestId ?? "n/a"})`,
         );
-        const data =
-          (await response.json()) as unknown as SkyflowDeidentifyResponse;
         return data;
       }
 
+      // Read the full response body for error logging
+      const errorBody = await response.text().catch(() => "Unknown error");
+      console.debug(`[Skyflow]   Body: ${errorBody}`);
+
       // Non-retryable client errors
       if (response.status >= 400 && response.status < 500) {
-        const errorBody = await response.text().catch(() => "Unknown error");
         console.error(
           `[Skyflow] Detect API client error ${response.status} (x-request-id: ${requestId ?? "n/a"}): ${errorBody}`,
         );
@@ -107,10 +135,10 @@ export async function deidentifyText(
 
       // Retryable server errors (5xx)
       console.error(
-        `[Skyflow] Detect API server error ${response.status} (attempt ${attempt + 1}/${MAX_RETRIES + 1}, x-request-id: ${requestId ?? "n/a"})`,
+        `[Skyflow] Detect API server error ${response.status} (attempt ${attempt + 1}/${MAX_RETRIES + 1}, x-request-id: ${requestId ?? "n/a"}): ${errorBody}`,
       );
       lastError = new SkyflowClientError(
-        `Skyflow API server error (${response.status})`,
+        `Skyflow API server error (${response.status}): ${errorBody}`,
         response.status,
         true,
         requestId,

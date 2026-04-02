@@ -280,6 +280,10 @@ export function wrapWithDetection(
 
     const text = extractTextForMethod(message, method, allowedMethods);
 
+    console.log(
+      `[Detect] Client request received (method=${method}, id=${msgId}, hasText=${!!text.trim()})`,
+    );
+
     // Not an opt-in method or no scannable content → forward immediately
     if (!text.trim()) {
       transportToServer.send(message).catch((error) => {
@@ -349,6 +353,10 @@ export function wrapWithDetection(
     }
 
     const text = extractTextForMethod(message, method, allowedMethods);
+
+    console.log(
+      `[Detect] Server response received (method=${method}, id=${msg.id}, hasText=${!!text.trim()})`,
+    );
 
     // Not an opt-in method or no scannable content → forward immediately
     if (!text.trim()) {
@@ -542,6 +550,10 @@ function handleTokenizeMode(
 
   const messageId = (message as any).id;
 
+  console.log(
+    `[Detect] Tokenize mode: scanning ${direction} message (method=${method}, id=${messageId})`,
+  );
+
   detectPii(text, credentials, entityTypes, tokenType)
     .then((result) => {
       if (result.hasPii) {
@@ -562,6 +574,9 @@ function handleTokenizeMode(
             method,
           ),
         );
+        console.log(
+          `[Detect] Forwarding tokenized message (direction=${direction}, method=${method}, id=${messageId}, entities=${result.entityCount})`,
+        );
         forwardTo.send(tokenizedMessage).catch((error) => {
           console.error("Error forwarding tokenized message:", error);
         });
@@ -578,6 +593,9 @@ function handleTokenizeMode(
             method,
           ),
         );
+        console.log(
+          `[Detect] Forwarding clean message (direction=${direction}, method=${method}, id=${messageId})`,
+        );
         forwardTo.send(message).catch((error) => {
           console.error("Error forwarding clean message:", error);
         });
@@ -588,6 +606,9 @@ function handleTokenizeMode(
       console.error(
         "Detection service error (tokenize mode, fail-closed):",
         error,
+      );
+      console.log(
+        `[Detect] Detection failed (tokenize, fail-closed): ${direction} message DROPPED (method=${method}, id=${messageId})`,
       );
 
       emitEvent(
@@ -649,6 +670,10 @@ function handleErrorMode(
 
   const messageId = (message as any).id;
 
+  console.log(
+    `[Detect] Error mode: scanning ${direction} message (method=${method}, id=${messageId})`,
+  );
+
   detectPii(text, credentials, entityTypes, tokenType)
     .then((result) => {
       if (result.hasPii) {
@@ -665,6 +690,10 @@ function handleErrorMode(
           ),
         );
 
+        console.log(
+          `[Detect] PII detected, BLOCKING ${direction} message (method=${method}, id=${messageId}, entities=${result.entityCount})`,
+        );
+
         // Send error response back if this is a request with an ID and we have a target
         if (messageId !== undefined && errorResponseTo) {
           errorResponseTo
@@ -675,6 +704,9 @@ function handleErrorMode(
         }
       } else {
         // Clean - forward the message
+        console.log(
+          `[Detect] Forwarding clean message (direction=${direction}, method=${method}, id=${messageId})`,
+        );
         forwardTo.send(message).catch((error) => {
           console.error("Error forwarding clean message:", error);
         });
@@ -683,6 +715,9 @@ function handleErrorMode(
     .catch((error) => {
       // Fail-closed: block message if detection service is unavailable
       console.error("Detection service error (fail-closed):", error);
+      console.log(
+        `[Detect] Detection failed (error, fail-closed): ${direction} message DROPPED (method=${method}, id=${messageId})`,
+      );
 
       emitEvent(
         createEvent(
