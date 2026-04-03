@@ -454,77 +454,142 @@ function detectAndEmit(
 }
 
 /**
- * Replaces PII values in a serialized JSON subtree with their Skyflow tokens.
- * Returns the parsed result, or the original value if replacement produces invalid JSON.
+ * Accumulator for aggregating results across multiple deidentify calls.
  */
-function tokenizeSubtree(value: unknown, entities: SkyflowEntity[]): unknown {
-  let serialized = JSON.stringify(value);
+interface DeidentifyAccumulator {
+  entities: SkyflowEntity[];
+  originals: string[];
+  processed: string[];
+}
 
-  // Sort entities by value length descending to avoid partial matches
-  // e.g., "John Smith" should be replaced before "John"
-  const sortedEntities = [...entities].sort(
-    (a, b) => b.value.length - a.value.length,
-  );
-
-  for (const entity of sortedEntities) {
-    // JSON-escape both value and token for safe replacement in serialized JSON
-    const escapedValue = JSON.stringify(entity.value).slice(1, -1);
-    const escapedToken = JSON.stringify(entity.token).slice(1, -1);
-    // Use split/join for literal string replacement (no regex escaping needed)
-    serialized = serialized.split(escapedValue).join(escapedToken);
-  }
-
-  try {
-    return JSON.parse(serialized);
-  } catch {
-    console.error(
-      "Tokenization produced invalid JSON in subtree, using original",
+/**
+ * Recursively walks a value and deidentifies every string leaf in place.
+ * Each string gets its own Skyflow API call; the response's processed_text
+ * replaces the original string directly — no manual find/replace needed.
+ */
+async function deidentifyStringsInPlace(
+  obj: unknown,
+  parent: Record<string, unknown> | unknown[],
+  key: string | number,
+  credentials: SkyflowCredentials,
+  entityTypes: string[] | undefined,
+  tokenType: string | undefined,
+  acc: DeidentifyAccumulator,
+): Promise<void> {
+  if (typeof obj === "string") {
+    if (!obj.trim()) return;
+    const response = await deidentifyText(
+      obj,
+      credentials,
+      undefined,
+      entityTypes,
+      tokenType,
     );
-    return value;
+    (parent as Record<string | number, unknown>)[key] = response.processed_text;
+    acc.entities.push(...response.entities);
+    acc.originals.push(obj);
+    acc.processed.push(response.processed_text);
+  } else if (Array.isArray(obj)) {
+    for (let i = 0; i < obj.length; i++) {
+      await deidentifyStringsInPlace(
+        obj[i],
+        obj,
+        i,
+        credentials,
+        entityTypes,
+        tokenType,
+        acc,
+      );
+    }
+  } else if (obj !== null && typeof obj === "object") {
+    for (const k of Object.keys(obj as Record<string, unknown>)) {
+      await deidentifyStringsInPlace(
+        (obj as Record<string, unknown>)[k],
+        obj as Record<string, unknown>,
+        k,
+        credentials,
+        entityTypes,
+        tokenType,
+        acc,
+      );
+    }
   }
 }
 
 /**
- * Replaces PII values in a JSON-RPC message with their Skyflow tokens.
- * Scoped to only the sub-fields listed in SCAN_METHODS for the given method,
- * so structural data (tool names, resource URIs, etc.) is never touched.
+ * Deidentifies all string fields in a JSON-RPC message's scannable subtrees.
+ * Makes one Skyflow API call per string leaf and uses processed_text directly.
+ * Returns the modified message + aggregated DetectionResult, or null if the
+ * method is not scannable.
  */
-function tokenizeMessage(
+async function deidentifyMessageFields(
   message: JSONRPCMessage,
-  entities: SkyflowEntity[],
-  method: string | null,
-): JSONRPCMessage {
-  if (entities.length === 0 || !method) return message;
+  method: string,
+  credentials: SkyflowCredentials,
+  allowedMethods?: Set<string> | null,
+  entityTypes?: string[],
+  tokenType?: string,
+): Promise<{ message: JSONRPCMessage; result: DetectionResult } | null> {
+  if (allowedMethods && !allowedMethods.has(method)) return null;
   const scanConfig = SCAN_METHODS[method];
-  if (!scanConfig) return message;
+  if (!scanConfig) return null;
 
-  const msg = { ...message } as Record<string, unknown>;
+  // Deep-clone so we can mutate safely
+  const msg = JSON.parse(JSON.stringify(message)) as Record<string, unknown>;
+  const acc: DeidentifyAccumulator = {
+    entities: [],
+    originals: [],
+    processed: [],
+  };
 
   if (scanConfig.params && msg.params) {
-    const params = { ...(msg.params as Record<string, unknown>) };
+    const params = msg.params as Record<string, unknown>;
     for (const field of scanConfig.params) {
       if (params[field] !== undefined) {
-        params[field] = tokenizeSubtree(params[field], entities);
+        await deidentifyStringsInPlace(
+          params[field],
+          params,
+          field,
+          credentials,
+          entityTypes,
+          tokenType,
+          acc,
+        );
       }
     }
-    msg.params = params;
   }
 
   if (scanConfig.result && msg.result) {
-    const result = { ...(msg.result as Record<string, unknown>) };
+    const result = msg.result as Record<string, unknown>;
     for (const field of scanConfig.result) {
       if (result[field] !== undefined) {
-        result[field] = tokenizeSubtree(result[field], entities);
+        await deidentifyStringsInPlace(
+          result[field],
+          result,
+          field,
+          credentials,
+          entityTypes,
+          tokenType,
+          acc,
+        );
       }
     }
-    msg.result = result;
   }
 
-  return msg as JSONRPCMessage;
+  return {
+    message: msg as unknown as JSONRPCMessage,
+    result: {
+      entities: acc.entities,
+      originalText: acc.originals.join("\n"),
+      processedText: acc.processed.join("\n"),
+      hasPii: acc.entities.length > 0,
+      entityCount: acc.entities.length,
+    },
+  };
 }
 
 /**
- * Synchronous detection for tokenize mode. Replaces PII with Skyflow tokens before forwarding.
+ * Tokenize mode: deidentify each string field via Skyflow, replace with processed_text, then forward.
  * Fail-closed: if detection service is unavailable, message is blocked.
  */
 function handleTokenizeMode(
@@ -541,7 +606,6 @@ function handleTokenizeMode(
   tokenType?: string,
 ): void {
   if (!text.trim()) {
-    // No text to scan, forward immediately
     forwardTo.send(message).catch((error) => {
       console.error("Error forwarding message:", error);
     });
@@ -554,26 +618,38 @@ function handleTokenizeMode(
     `[Detect] Tokenize mode: scanning ${direction} message (method=${method}, id=${messageId})`,
   );
 
-  detectPii(text, credentials, entityTypes, tokenType)
-    .then((result) => {
-      if (result.hasPii) {
-        // Tokenize and forward
-        const tokenizedMessage = tokenizeMessage(
-          message,
-          result.entities,
+  deidentifyMessageFields(
+    message,
+    method!,
+    credentials,
+    null,
+    entityTypes,
+    tokenType,
+  )
+    .then((deidentified) => {
+      if (!deidentified) {
+        // Method not scannable (shouldn't happen — we checked text above)
+        forwardTo.send(message).catch((error) => {
+          console.error("Error forwarding message:", error);
+        });
+        return;
+      }
+
+      const { message: tokenizedMessage, result } = deidentified;
+
+      emitEvent(
+        createEvent(
+          sessionId,
+          direction,
+          result,
+          false,
+          "tokenize",
+          result.hasPii,
           method,
-        );
-        emitEvent(
-          createEvent(
-            sessionId,
-            direction,
-            result,
-            false,
-            "tokenize",
-            true,
-            method,
-          ),
-        );
+        ),
+      );
+
+      if (result.hasPii) {
         console.log(
           `[Detect] Forwarding tokenized message (direction=${direction}, method=${method}, id=${messageId}, entities=${result.entityCount})`,
         );
@@ -581,18 +657,6 @@ function handleTokenizeMode(
           console.error("Error forwarding tokenized message:", error);
         });
       } else {
-        // Clean — forward unchanged
-        emitEvent(
-          createEvent(
-            sessionId,
-            direction,
-            result,
-            false,
-            "tokenize",
-            false,
-            method,
-          ),
-        );
         console.log(
           `[Detect] Forwarding clean message (direction=${direction}, method=${method}, id=${messageId})`,
         );
